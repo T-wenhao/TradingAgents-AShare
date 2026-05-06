@@ -204,6 +204,33 @@ async def _run_manual_trigger(
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Initialize resources on startup and cleanup on shutdown."""
+    # Raise the AnyIO thread limiter ceiling so frequent sync endpoints
+    # (tracking-board polling, /v1/jobs/{id} polling, akshare-backed
+    # market endpoints) cannot starve each other when the event loop is
+    # also running long-lived `_run_job` tasks.
+    try:
+        from anyio import to_thread as _anyio_to_thread
+
+        limiter = _anyio_to_thread.current_default_thread_limiter()
+        desired = int(os.getenv("ANYIO_THREAD_LIMIT", "120"))
+        if limiter.total_tokens < desired:
+            limiter.total_tokens = desired
+            _log(f"AnyIO thread limiter raised to {desired}.")
+    except Exception as exc:
+        _log(f"Could not raise AnyIO thread limiter: {exc}")
+
+    # Default asyncio executor is used by `asyncio.to_thread`. The CPython
+    # default is `min(32, cpu_count + 4)`, which is too small when many
+    # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
+    # DB writes, LLM extraction, and akshare data collection.
+    try:
+        loop = asyncio.get_running_loop()
+        executor_workers = int(os.getenv("ASYNCIO_DEFAULT_EXECUTOR_WORKERS", "64"))
+        loop.set_default_executor(ThreadPoolExecutor(max_workers=executor_workers))
+        _log(f"Default asyncio executor set to {executor_workers} workers.")
+    except Exception as exc:
+        _log(f"Could not configure default asyncio executor: {exc}")
+
     init_db()
     _log("Database initialized.")
     store = get_job_store()
@@ -2607,13 +2634,20 @@ async def analyze(
     request: AnalyzeRequest,
     current_user: UserDB = Depends(_require_api_user),
 ) -> AnalyzeResponse:
-    with get_db_ctx() as db:
-        merged_user_context = _compose_analysis_user_context(
-            db,
-            current_user.id,
-            request.symbol,
-            explicit_context=_extract_request_user_context(request),
-        )
+    explicit_context = _extract_request_user_context(request)
+
+    def _load_user_context() -> Dict[str, Any]:
+        with get_db_ctx() as db:
+            return _compose_analysis_user_context(
+                db,
+                current_user.id,
+                request.symbol,
+                explicit_context=explicit_context,
+            )
+
+    # Don't block the event loop on a sync SQLite read while the scheduler
+    # process may be holding write locks.
+    merged_user_context = await asyncio.to_thread(_load_user_context)
     _apply_user_context_to_request(request, merged_user_context)
 
     job_id = uuid4().hex
@@ -2927,14 +2961,19 @@ async def chat_completions(
                     "focus_areas": focus_areas,
                     "specific_questions": specific_questions,
                 }
-                with get_db_ctx() as db:
-                    merged_user_context = _compose_analysis_user_context(
-                        db,
-                        current_user.id,
-                        symbol,
-                        explicit_context=_extract_request_user_context(request),
-                        inferred_context=inferred_user_context,
-                    )
+                explicit_context = _extract_request_user_context(request)
+
+                def _load_user_context() -> Dict[str, Any]:
+                    with get_db_ctx() as db:
+                        return _compose_analysis_user_context(
+                            db,
+                            current_user.id,
+                            symbol,
+                            explicit_context=explicit_context,
+                            inferred_context=inferred_user_context,
+                        )
+
+                merged_user_context = await asyncio.to_thread(_load_user_context)
                 pre_intent["user_context"] = merged_user_context
                 analyze_req = AnalyzeRequest(
                     symbol=symbol,
@@ -3002,14 +3041,19 @@ async def chat_completions(
         "focus_areas": focus_areas,
         "specific_questions": specific_questions,
     }
-    with get_db_ctx() as db:
-        merged_user_context = _compose_analysis_user_context(
-            db,
-            current_user.id,
-            symbol,
-            explicit_context=_extract_request_user_context(request),
-            inferred_context=inferred_user_context,
-        )
+    explicit_context = _extract_request_user_context(request)
+
+    def _load_user_context_nonstream() -> Dict[str, Any]:
+        with get_db_ctx() as db:
+            return _compose_analysis_user_context(
+                db,
+                current_user.id,
+                symbol,
+                explicit_context=explicit_context,
+                inferred_context=inferred_user_context,
+            )
+
+    merged_user_context = await asyncio.to_thread(_load_user_context_nonstream)
     pre_intent["user_context"] = merged_user_context
     analyze_req = AnalyzeRequest(
         symbol=symbol,

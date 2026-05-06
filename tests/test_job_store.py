@@ -99,3 +99,66 @@ def test_clear():
     store.clear()
     assert store.get_job("j1") == {}
     assert store.get_job("j2") == {}
+
+
+def test_subscribe_drops_queue_on_exit():
+    """Subscribe should delete the backing queue when its generator terminates,
+    so disconnected SSE clients don't leak queues forever."""
+    async def scenario():
+        store = _make_store()
+        store.set_job("j1", status="running")
+
+        store.emit_event("j1", "job.completed", {"result": "ok"})
+        async for _ in store.subscribe("j1"):
+            pass
+
+        # After the generator exits, the queue should be gone.
+        assert "j1" not in store._job_events
+
+    asyncio.run(scenario())
+
+
+def test_emit_drops_oldest_when_queue_full(monkeypatch):
+    """Bounded queue should drop the oldest event on overflow rather than
+    grow unbounded when no consumer is attached."""
+    import api.job_store as js
+
+    monkeypatch.setattr(js, "_QUEUE_MAXSIZE", 3)
+
+    async def scenario():
+        store = js.InMemoryJobStore()
+        store.set_job("j1", status="running")
+
+        for i in range(5):
+            store.emit_event("j1", "agent.token", {"i": i})
+
+        q = store._job_events["j1"]
+        assert q.qsize() == 3
+        events = []
+        while not q.empty():
+            events.append(q.get_nowait())
+        # Oldest two should be dropped: events 0, 1 gone; 2, 3, 4 remain.
+        assert [e["data"]["i"] for e in events] == [2, 3, 4]
+
+    asyncio.run(scenario())
+
+
+def test_terminal_status_schedules_cleanup():
+    """Setting status=completed should arm a TTL handle so the job state is
+    eventually freed even if no SSE subscriber attaches."""
+    import api.job_store as js
+
+    async def scenario():
+        store = js.InMemoryJobStore()
+        store.set_job("j1", status="running")
+        assert "j1" not in store._cleanup_handles
+        store.set_job("j1", status="completed")
+        # Give the loop a tick to process call_soon_threadsafe.
+        await asyncio.sleep(0)
+        assert "j1" in store._cleanup_handles
+
+        # delete_job should cancel the pending handle.
+        store.delete_job("j1")
+        assert "j1" not in store._cleanup_handles
+
+    asyncio.run(scenario())
