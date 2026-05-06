@@ -86,13 +86,24 @@ class InMemoryJobStore:
         self._cleanup_handles: Dict[str, asyncio.TimerHandle] = {}
 
     def _capture_loop(self) -> Optional[asyncio.AbstractEventLoop]:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            return self._loop
-        # Cache the running loop for later use from worker threads.
-        self._loop = loop
+        loop, _ = self._resolve_loop()
         return loop
+
+    def _resolve_loop(self) -> "tuple[Optional[asyncio.AbstractEventLoop], bool]":
+        """Return (loop, on_loop). ``loop`` is the running loop if available,
+        else the cached one captured by a previous call. ``on_loop`` is True
+        only when the caller is currently executing on the event loop thread.
+        """
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            return self._loop, False
+        # First-time capture is racy across threads; only set once to keep
+        # all worker threads pointing at the same loop.
+        with self._lock:
+            if self._loop is None:
+                self._loop = running
+        return running, True
 
     # ── state management ────────────────────────────────────────────────
 
@@ -102,11 +113,14 @@ class InMemoryJobStore:
                 self._jobs[job_id] = {}
             self._jobs[job_id].update(fields)
             new_status = fields.get("status")
-        # When a job becomes terminal, schedule TTL-based cleanup so the
-        # in-memory store does not grow unbounded across the API process'
-        # lifetime.
+        # Adjust TTL cleanup based on the new status:
+        #   - moving INTO completed/failed → arm a cleanup timer
+        #   - moving OUT of terminal (e.g. rerun, status="running") → cancel
+        #     any pending timer so we don't drop a freshly-restarted job
         if new_status in _TERMINAL_STATUSES:
             self._schedule_cleanup(job_id)
+        elif new_status is not None:
+            self._cancel_cleanup(job_id)
 
     def get_job(self, job_id: str) -> Dict[str, Any]:
         with self._lock:
@@ -120,14 +134,15 @@ class InMemoryJobStore:
         if handle is not None:
             handle.cancel()
 
+    def _cancel_cleanup(self, job_id: str) -> None:
+        with self._lock:
+            handle = self._cleanup_handles.pop(job_id, None)
+        if handle is not None:
+            handle.cancel()
+
     def _schedule_cleanup(self, job_id: str) -> None:
         """Drop job state and event queue after _INMEMORY_JOB_TTL seconds."""
-        loop = self._loop
-        try:
-            loop = asyncio.get_running_loop()
-            self._loop = loop
-        except RuntimeError:
-            pass
+        loop, on_loop = self._resolve_loop()
         if loop is None or not loop.is_running():
             # No event loop available (e.g. called from a worker thread before
             # the loop was captured). The next subscribe()/emit_event() will
@@ -146,13 +161,6 @@ class InMemoryJobStore:
         if existing is not None:
             existing.cancel()
 
-        # call_later must run on the loop thread; if we're on a worker thread,
-        # schedule via call_soon_threadsafe.
-        try:
-            on_loop = asyncio.get_running_loop() is loop
-        except RuntimeError:
-            on_loop = False
-
         def _arm() -> None:
             handle = loop.call_later(_INMEMORY_JOB_TTL, _do_cleanup)
             with self._lock:
@@ -161,7 +169,13 @@ class InMemoryJobStore:
         if on_loop:
             _arm()
         else:
-            loop.call_soon_threadsafe(_arm)
+            try:
+                loop.call_soon_threadsafe(_arm)
+            except RuntimeError:
+                # Loop closed mid-call (e.g. during process shutdown). Don't
+                # let a cleanup-arming failure propagate up and abort the
+                # status write that triggered us.
+                logger.debug("Could not arm cleanup for %s: loop closed", job_id)
 
     # ── event queue ─────────────────────────────────────────────────────
 
@@ -207,23 +221,20 @@ class InMemoryJobStore:
             "timestamp": _utcnow_iso(),
         }
         q = self._ensure_queue(job_id)
+        loop, on_loop = self._resolve_loop()
 
-        try:
-            loop = asyncio.get_running_loop()
-            self._loop = loop
-        except RuntimeError:
-            loop = None
-
-        if loop and loop.is_running():
+        if on_loop:
             self._put_with_overflow(q, payload)
-        else:
-            target_loop = self._loop
-            if target_loop is not None and target_loop.is_running():
-                target_loop.call_soon_threadsafe(self._put_with_overflow, q, payload)
-            else:
-                # Best-effort fallback: just push directly. The SSE consumer
-                # on the loop side will pick it up on the next wait_for cycle.
+        elif loop is not None and loop.is_running():
+            try:
+                loop.call_soon_threadsafe(self._put_with_overflow, q, payload)
+            except RuntimeError:
+                # Loop closed; fall through to direct put.
                 self._put_with_overflow(q, payload)
+        else:
+            # Best-effort fallback: just push directly. The SSE consumer
+            # on the loop side will pick it up on the next wait_for cycle.
+            self._put_with_overflow(q, payload)
 
     async def subscribe(
         self, job_id: str, *, poll_interval: float = 15.0

@@ -223,10 +223,15 @@ async def lifespan(app: FastAPI):
     # default is `min(32, cpu_count + 4)`, which is too small when many
     # `_run_job_inner` coroutines fan out concurrent `to_thread` calls for
     # DB writes, LLM extraction, and akshare data collection.
+    new_default_executor: Optional[ThreadPoolExecutor] = None
     try:
         loop = asyncio.get_running_loop()
         executor_workers = int(os.getenv("ASYNCIO_DEFAULT_EXECUTOR_WORKERS", "64"))
-        loop.set_default_executor(ThreadPoolExecutor(max_workers=executor_workers))
+        new_default_executor = ThreadPoolExecutor(
+            max_workers=executor_workers,
+            thread_name_prefix="ta-asyncio",
+        )
+        loop.set_default_executor(new_default_executor)
         _log(f"Default asyncio executor set to {executor_workers} workers.")
     except Exception as exc:
         _log(f"Could not configure default asyncio executor: {exc}")
@@ -256,6 +261,8 @@ async def lifespan(app: FastAPI):
     yield
     _log("Shutting down: Cleaning up resources...")
     _executor.shutdown(wait=True)
+    if new_default_executor is not None:
+        new_default_executor.shutdown(wait=False)
     _log("Executor shutdown complete.")
 
 

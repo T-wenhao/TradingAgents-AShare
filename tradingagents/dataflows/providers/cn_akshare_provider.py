@@ -746,10 +746,10 @@ class CnAkshareProvider(BaseMarketDataProvider):
                     ak = self._ak()
                     df = ak.stock_zh_a_spot_em()
             except TimeoutError as exc:
-                logger.warning("[realtime-quotes] Eastmoney slot timeout: %s", exc)
+                _lock_logger.warning("[realtime-quotes] Eastmoney slot timeout: %s", exc)
                 return json.dumps({})
             except Exception as exc:
-                logger.warning("[realtime-quotes] Eastmoney fetch failed: %s", exc)
+                _lock_logger.warning("[realtime-quotes] Eastmoney fetch failed: %s", exc)
                 return json.dumps({})
             CnAkshareProvider._spot_cache = df
             CnAkshareProvider._spot_cache_ts = now

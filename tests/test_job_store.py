@@ -153,12 +153,30 @@ def test_terminal_status_schedules_cleanup():
         store.set_job("j1", status="running")
         assert "j1" not in store._cleanup_handles
         store.set_job("j1", status="completed")
-        # Give the loop a tick to process call_soon_threadsafe.
-        await asyncio.sleep(0)
+        # set_job runs synchronously on the loop, so the handle is armed
+        # before set_job returns.
         assert "j1" in store._cleanup_handles
 
         # delete_job should cancel the pending handle.
         store.delete_job("j1")
         assert "j1" not in store._cleanup_handles
+
+    asyncio.run(scenario())
+
+
+def test_status_leaves_terminal_cancels_cleanup():
+    """If a job is rerun (status moves out of completed/failed) the pending
+    cleanup timer should be cancelled so the rerun isn't dropped at TTL."""
+    import api.job_store as js
+
+    async def scenario():
+        store = js.InMemoryJobStore()
+        store.set_job("j1", status="completed")
+        assert "j1" in store._cleanup_handles
+        handle = store._cleanup_handles["j1"]
+
+        store.set_job("j1", status="running")
+        assert "j1" not in store._cleanup_handles
+        assert handle.cancelled()
 
     asyncio.run(scenario())
