@@ -2046,14 +2046,21 @@ async def _run_job_inner(
                         msg = messages[-1]
                         content = _extract_message_text(getattr(msg, "content", ""))
                         agent_name = getattr(msg, "name", None)
+                        msg_type = getattr(msg, "type", "unknown")  # human/system/ai/tool
 
                         if content:
-                            _log(f"[Agent Message] {agent_name}: {content[:200]}...")
+                            if agent_name:
+                                _log(f"[Agent Message] {agent_name}: {content[:200]}...")
+                            elif msg_type in ("human", "system"):
+                                # Graph 入口的初始 prompt，不是 agent 产出，跳过
+                                pass
+                            else:
+                                _log(f"[Agent Message] {msg_type}: {content[:200]}...")
 
                         for tool_call in getattr(msg, "tool_calls", []) or []:
                             tool_name = tool_call.get("name", "unknown") if isinstance(tool_call, dict) else getattr(tool_call, "name", "unknown")
                             tool_args = tool_call.get("args", {}) if isinstance(tool_call, dict) else getattr(tool_call, "args", {})
-                            _log(f"[Tool Call] {agent_name}: {tool_name}")
+                            _log(f"[Tool Call] {agent_name or msg_type}: {tool_name}")
 
                             agent_display = agent_name
                             if not agent_display:
@@ -2488,6 +2495,15 @@ def version_stats(payload: Dict[str, Any] = Body(...), request: Request = None, 
     return {"status": "ok"}
 
 
+_RESOLVABLE_SYMBOL_RE = re.compile(
+    r"^("
+    r"\d{6}\.(SH|SZ|BJ)"          # A 股 / 北交所
+    r"|\d{4,5}\.HK"                # 港股
+    r"|[A-Z][A-Z0-9.\-]{0,10}"     # 美股 / 通用 ticker
+    r")$"
+)
+
+
 @app.get("/v1/market/kline", response_model=KlineResponse)
 def get_kline(
     symbol: str,
@@ -2504,7 +2520,16 @@ def get_kline(
         candles = _fetch_index_kline(symbol, start, end)
     else:
         # Normalize symbol (convert "阳光电源" -> "300274.SZ")
+        original = symbol
         symbol = _normalize_symbol(symbol)
+        if not _RESOLVABLE_SYMBOL_RE.match(symbol):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"unrecognized symbol {original!r} (normalized to {symbol!r}); "
+                    f"expected formats: '300394.SZ' / 'AAPL' / '00700.HK'"
+                ),
+            )
         config = _build_runtime_config({})
         set_config(config)
         raw = route_to_vendor("get_stock_data", symbol, start, end)
