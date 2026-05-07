@@ -1822,7 +1822,10 @@ async def _run_job_inner(
                         if db_updates:
                             await asyncio.to_thread(_horizon_partial_update, db_updates)
                 except Exception as e:
-                    _log(f"Error during horizon streaming ({horizon}): {e}")
+                    _log(
+                        f"Error during horizon streaming ({horizon}): {e!r}\n"
+                        f"{traceback.format_exc()}"
+                    )
                     raise
                 finally:
                     current_tracker_var.reset(_tracker_token)
@@ -1841,7 +1844,8 @@ async def _run_job_inner(
             horizon_errors = []
             for i, r in enumerate(results):
                 if isinstance(r, Exception):
-                    _log(f"Horizon '{request.horizons[i]}' failed: {r}")
+                    tb = "".join(traceback.format_exception(type(r), r, r.__traceback__))
+                    _log(f"Horizon '{request.horizons[i]}' failed: {r!r}\n{tb}")
                     horizon_errors.append(f"{request.horizons[i]}: {r}")
             if horizon_errors:
                 raise RuntimeError(f"Horizon analysis failed: {'; '.join(horizon_errors)}")
