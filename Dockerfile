@@ -44,6 +44,7 @@ ENV APP_VERSION=${VERSION}
 # 环境变量设置
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONPATH=/app
+ENV TA_JOB_TIMEOUT=1800
 
 # 启动命令
 CMD ["uv", "run", "--no-sync", "tradingagents-api"]

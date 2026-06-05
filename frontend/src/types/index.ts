@@ -113,6 +113,8 @@ export interface JobStatus {
     symbol: string
     trade_date: string
     error?: string
+    agents?: AgentSnapshotEvent['agents']
+    current_horizon?: string | null
     waiting_ahead_count?: number | null
     scheduled_running_count?: number | null
     scheduled_concurrency_limit?: number | null
@@ -130,6 +132,8 @@ export type SSEEventType =
     | 'agent.report'
     | 'agent.report.chunk'
     | 'agent.snapshot'
+    | 'agent.horizon_start'
+    | 'agent.horizon_done'
     | 'agent.milestone'
     | 'agent.writing'
     | 'agent.activity'
@@ -137,6 +141,8 @@ export type SSEEventType =
     | 'agent.token'
     | 'agent.debate'
     | 'agent.debate.token'
+    | 'done'
+    | 'ping'
 
 export interface SSEEvent {
     event: SSEEventType

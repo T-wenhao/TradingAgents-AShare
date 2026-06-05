@@ -1,4 +1,8 @@
+import json
+import os
 import re
+import shutil
+import subprocess
 import time
 import threading
 import contextvars
@@ -881,33 +885,210 @@ class CnAkshareProvider(BaseMarketDataProvider):
         except Exception as exc:
             return f"板块资金流向数据获取失败：{type(exc).__name__}: {exc}"
 
+    # 个股资金流接口更容易触发风控：使用长 TTL 成功缓存、失败冷却和全局最小请求间隔。
+    _fund_flow_cache: dict[str, tuple[float, str]] = {}
+    _fund_flow_failures: dict[str, tuple[float, str]] = {}
+    _fund_flow_lock = threading.Lock()
+    _fund_flow_last_request_monotonic: float = 0.0
+    _FUND_FLOW_CACHE_TTL: float = float(os.getenv("TA_FUND_FLOW_CACHE_TTL", "21600"))  # 6 hours
+    _FUND_FLOW_FAILURE_COOLDOWN: float = float(os.getenv("TA_FUND_FLOW_FAILURE_COOLDOWN", "300"))  # 5 minutes
+    _FUND_FLOW_MIN_INTERVAL: float = float(os.getenv("TA_FUND_FLOW_MIN_INTERVAL", "3.0"))  # seconds
+
+    @classmethod
+    def _get_fund_flow_cached_result(cls, key: str) -> str | None:
+        now = time.time()
+        with cls._fund_flow_lock:
+            cached = cls._fund_flow_cache.get(key)
+            if cached and (now - cached[0]) < cls._FUND_FLOW_CACHE_TTL:
+                return cached[1]
+            if cached:
+                cls._fund_flow_cache.pop(key, None)
+
+            failed = cls._fund_flow_failures.get(key)
+            if failed and (now - failed[0]) < cls._FUND_FLOW_FAILURE_COOLDOWN:
+                return failed[1]
+            if failed:
+                cls._fund_flow_failures.pop(key, None)
+        return None
+
+    @classmethod
+    def _cache_fund_flow_success(cls, key: str, value: str) -> None:
+        with cls._fund_flow_lock:
+            cls._fund_flow_cache[key] = (time.time(), value)
+            cls._fund_flow_failures.pop(key, None)
+
+    @classmethod
+    def _cache_fund_flow_failure(cls, key: str, value: str) -> None:
+        with cls._fund_flow_lock:
+            cls._fund_flow_failures[key] = (time.time(), value)
+
+    @classmethod
+    def _wait_fund_flow_rate_limit(cls) -> None:
+        interval = max(0.0, cls._FUND_FLOW_MIN_INTERVAL)
+        if interval <= 0:
+            return
+        while True:
+            with cls._fund_flow_lock:
+                now = time.monotonic()
+                wait_seconds = cls._fund_flow_last_request_monotonic + interval - now
+                if wait_seconds <= 0:
+                    cls._fund_flow_last_request_monotonic = now
+                    return
+            time.sleep(min(wait_seconds, interval))
+
+    @staticmethod
+    def _format_individual_fund_flow(symbol: str, df: pd.DataFrame, source_note: str = "") -> str:
+        if df is None or df.empty:
+            return f"{symbol} 近期主力资金流向数据暂不可用。"
+        df_recent = df.tail(5)
+        note = f"（{source_note}）" if source_note else ""
+        return f"{symbol} 近5日主力资金净流向{note}：\n{df_recent.to_string(index=False)}"
+
+    @staticmethod
+    def _parse_eastmoney_fund_flow_klines(klines: list[str]) -> pd.DataFrame:
+        temp_df = pd.DataFrame([item.split(",") for item in klines])
+        temp_df.columns = [
+            "日期",
+            "主力净流入-净额",
+            "小单净流入-净额",
+            "中单净流入-净额",
+            "大单净流入-净额",
+            "超大单净流入-净额",
+            "主力净流入-净占比",
+            "小单净流入-净占比",
+            "中单净流入-净占比",
+            "大单净流入-净占比",
+            "超大单净流入-净占比",
+            "收盘价",
+            "涨跌幅",
+            "_unused_1",
+            "_unused_2",
+        ]
+        temp_df = temp_df[
+            [
+                "日期",
+                "收盘价",
+                "涨跌幅",
+                "主力净流入-净额",
+                "主力净流入-净占比",
+                "超大单净流入-净额",
+                "超大单净流入-净占比",
+                "大单净流入-净额",
+                "大单净流入-净占比",
+                "中单净流入-净额",
+                "中单净流入-净占比",
+                "小单净流入-净额",
+                "小单净流入-净占比",
+            ]
+        ]
+        temp_df["日期"] = pd.to_datetime(temp_df["日期"], errors="coerce").dt.date
+        for col in temp_df.columns:
+            if col != "日期":
+                temp_df[col] = pd.to_numeric(temp_df[col], errors="coerce")
+        return temp_df
+
+    def _fetch_individual_fund_flow_eastmoney_curl(self, code: str) -> pd.DataFrame:
+        curl_path = shutil.which("curl")
+        if not curl_path:
+            raise RuntimeError("未找到 curl，无法使用 Eastmoney 直连备用接口")
+
+        market_id = 1 if code[:1] in ("5", "6", "9") else 0
+        query = (
+            f"lmt=0&klt=101&secid={market_id}.{code}"
+            "&fields1=f1,f2,f3,f7"
+            "&fields2=f51,f52,f53,f54,f55,f56,f57,f58,f59,f60,f61,f62,f63,f64,f65"
+            "&ut=b2884a393a59ad64002292a3e90d46a5"
+        )
+        host = os.getenv("TA_FUND_FLOW_EASTMONEY_HOST", "push2his.eastmoney.com").strip() or "push2his.eastmoney.com"
+        url = f"https://{host}/api/qt/stock/fflow/daykline/get?{query}"
+        cmd = [
+            curl_path,
+            "--silent",
+            "--show-error",
+            "--location",
+            "--compressed",
+            "--connect-timeout",
+            "5",
+            "--max-time",
+            "12",
+            "--noproxy",
+            "*",
+            "-H",
+            "Referer: https://data.eastmoney.com/zjlx/detail.html",
+            "-H",
+            "User-Agent: Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+            url,
+        ]
+        completed = subprocess.run(
+            cmd,
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or f"curl exit {completed.returncode}")
+        try:
+            payload = json.loads(completed.stdout)
+            klines = ((payload.get("data") or {}).get("klines")) or []
+            if klines:
+                return self._parse_eastmoney_fund_flow_klines(klines)
+            raise RuntimeError("Eastmoney 直连备用接口未返回资金流 kline 数据")
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Eastmoney 直连响应不是 JSON：{exc}") from exc
+
     def get_individual_fund_flow(self, symbol: str) -> str:
         """获取个股近期主力资金净流向。"""
+        code = self._normalize_symbol(symbol)
+        cache_key = code
+        cached = self._get_fund_flow_cached_result(cache_key)
+        if cached is not None:
+            return cached
+
+        self._wait_fund_flow_rate_limit()
         try:
             ak = self._ak()
-            code = self._normalize_symbol(symbol)
             # 沪市：以 5、6、9 开头；其余为深市
             market = "sh" if code[:1] in ("5", "6", "9") else "sz"
             with AKSHARE_CALL_LOCK:
                 df = ak.stock_individual_fund_flow(stock=code, market=market)
-            if df is None or df.empty:
-                return f"{symbol} 近期主力资金流向数据暂不可用。"
-            df_recent = df.tail(5)
-            return f"{symbol} 近5日主力资金净流向：\n{df_recent.to_string(index=False)}"
-        except Exception as exc:
-            return f"个股资金流向数据获取失败：{type(exc).__name__}: {exc}"
+            result = self._format_individual_fund_flow(symbol, df)
+            self._cache_fund_flow_success(cache_key, result)
+            return result
+        except Exception as akshare_exc:
+            try:
+                self._wait_fund_flow_rate_limit()
+                df = self._fetch_individual_fund_flow_eastmoney_curl(code)
+                result = self._format_individual_fund_flow(symbol, df, "Eastmoney 直连备用接口")
+                self._cache_fund_flow_success(cache_key, result)
+                return result
+            except Exception as fallback_exc:
+                result = (
+                    "东方财富个股资金流向数据获取失败："
+                    f"AkShare={type(akshare_exc).__name__}: {akshare_exc}; "
+                    f"Eastmoney直连={type(fallback_exc).__name__}: {fallback_exc}"
+                )
+                self._cache_fund_flow_failure(cache_key, result)
+                return result
 
     def get_lhb_detail(self, symbol: str, date: str) -> str:
         """获取龙虎榜数据，非异动日返回空提示（属正常）。"""
         try:
             ak = self._ak()
             code = self._normalize_symbol(symbol)
+            compact_date = str(date).replace("-", "")
             with AKSHARE_CALL_LOCK:
-                df = ak.stock_lhb_detail_em(symbol=code, start_date=date, end_date=date)
+                df = ak.stock_lhb_detail_em(start_date=compact_date, end_date=compact_date)
             if df is None or df.empty:
+                return f"{symbol} 在 {date} 无龙虎榜数据（非异动日属正常）。"
+            if "代码" in df.columns:
+                df = df[df["代码"].astype(str).str.zfill(6) == code]
+            if df.empty:
                 return f"{symbol} 在 {date} 无龙虎榜数据（非异动日属正常）。"
             return f"{symbol} 龙虎榜明细（{date}）：\n{df.head(20).to_string(index=False)}"
         except Exception as exc:
+            if "NoneType" in str(exc) and "subscriptable" in str(exc):
+                return f"{symbol} 在 {date} 无龙虎榜数据或东方财富龙虎榜接口返回空结果。"
             return f"龙虎榜数据获取失败：{type(exc).__name__}: {exc}"
 
     def get_zt_pool(self, date: str) -> str:

@@ -1,5 +1,7 @@
 from unittest.mock import patch
-from tradingagents.graph.data_collector import DataCollector, make_cache_key
+import pandas as pd
+
+from tradingagents.graph.data_collector import DataCollector, make_cache_key, _format_recent_price_volume
 
 
 def test_make_cache_key():
@@ -52,3 +54,23 @@ def test_get_window_medium_returns_90_day_window():
     sliced = collector.get_window(pool, horizon="medium", trade_date="2026-03-12")
     assert sliced["_data_window"] == "90天"
     assert sliced["_horizon"] == "medium"
+
+
+def test_format_recent_price_volume_includes_feedback_dimensions():
+    df = pd.DataFrame({
+        "date": pd.date_range("2026-05-01", periods=25, freq="D"),
+        "open": range(25),
+        "high": range(1, 26),
+        "low": range(25),
+        "close": range(2, 27),
+        "volume": range(100, 125),
+        "turnover_rate": [1.2] * 25,
+    })
+
+    result = _format_recent_price_volume(df, days=5)
+
+    assert "最近量价反馈数据" in result
+    assert "收盘" in result
+    assert "涨跌幅%" in result
+    assert "量比(20日)" in result
+    assert "换手率" in result

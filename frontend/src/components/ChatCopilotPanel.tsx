@@ -273,6 +273,9 @@ export default function ChatCopilotPanel({ onSymbolDetected, onShowReport, initi
         switch (eventName) {
             case 'job.ready':
                 setIsConnected(true)
+                if (typeof data.job_id === 'string' && data.job_id) {
+                    setCurrentJobId(data.job_id)
+                }
                 // 把 typing indicator 换成"解析中"提示，告知用户正在识别标的
                 if (typingIndicatorIdRef.current) {
                     setMessageContent(typingIndicatorIdRef.current, '__parsing__')

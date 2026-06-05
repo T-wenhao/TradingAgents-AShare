@@ -334,7 +334,10 @@ def _utcnow_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-_JOB_TIMEOUT = int(os.getenv("TA_JOB_TIMEOUT", "1800"))  # seconds (默认 30 分钟，适配多 Agent 长流程分析)
+DEFAULT_JOB_TIMEOUT_SECONDS = 1800  # 30 分钟，适配多 Agent 长流程分析
+_JOB_TIMEOUT = int(os.getenv("TA_JOB_TIMEOUT", str(DEFAULT_JOB_TIMEOUT_SECONDS)))
+
+
 def _create_tracked_task(coro, *, label: str = "Background task") -> asyncio.Task:
     """Create an asyncio task and keep a reference to prevent GC.
     Also logs unhandled exceptions via a done callback."""
@@ -630,6 +633,8 @@ class JobStatusResponse(BaseModel):
     symbol: str
     trade_date: str
     error: Optional[str] = None
+    agents: List[Dict[str, Any]] = Field(default_factory=list)
+    current_horizon: Optional[str] = None
     waiting_ahead_count: Optional[int] = None
     scheduled_running_count: Optional[int] = None
     scheduled_concurrency_limit: Optional[int] = None
@@ -1071,7 +1076,68 @@ def _get_job(job_key: str) -> Dict[str, Any]:
     return d
 
 
+def _default_agent_snapshot() -> List[Dict[str, Any]]:
+    agents: List[Dict[str, Any]] = []
+    for team, members in FIXED_TEAMS.items():
+        for agent in members:
+            agents.append({"team": team, "agent": agent, "status": "pending"})
+    return agents
+
+
+def _team_for_agent(agent_name: str) -> str:
+    for team, members in FIXED_TEAMS.items():
+        if agent_name in members:
+            return team
+    return "Unknown"
+
+
+def _remember_job_progress_event(job_id: str, event: str, data: Dict[str, Any]) -> None:
+    """Persist the latest agent progress so polling clients can recover after refresh."""
+    if event == "agent.snapshot":
+        agents = data.get("agents")
+        fields: Dict[str, Any] = {
+            "agents": agents if isinstance(agents, list) else [],
+        }
+        if "horizon" in data:
+            fields["current_horizon"] = data.get("horizon")
+        _set_job(job_id, **fields)
+        return
+
+    if event == "agent.status":
+        agent_name = data.get("agent")
+        status = data.get("status")
+        if not isinstance(agent_name, str) or not isinstance(status, str):
+            return
+
+        job = _get_job(job_id)
+        raw_agents = job.get("agents")
+        agents = [dict(a) for a in raw_agents if isinstance(a, dict)] if isinstance(raw_agents, list) else _default_agent_snapshot()
+
+        found = False
+        for agent in agents:
+            if agent.get("agent") == agent_name:
+                agent["status"] = status
+                found = True
+                break
+        if not found:
+            agents.append({"team": _team_for_agent(agent_name), "agent": agent_name, "status": status})
+
+        fields = {"agents": agents}
+        if "horizon" in data:
+            fields["current_horizon"] = data.get("horizon")
+        _set_job(job_id, **fields)
+        return
+
+    if event == "agent.horizon_start" and isinstance(data.get("horizon"), str):
+        _set_job(job_id, current_horizon=data.get("horizon"))
+        return
+
+    if event in ("job.completed", "job.failed"):
+        _set_job(job_id, current_horizon=None)
+
+
 def _emit_job_event(job_id: str, event: str, data: Dict[str, Any]) -> None:
+    _remember_job_progress_event(job_id, event, data)
     get_job_store().emit_event(job_id, event, data)
 
 
@@ -2737,6 +2803,8 @@ def get_job_status(job_id: str, current_user: UserDB = Depends(_require_api_user
         symbol=job["symbol"],
         trade_date=job["trade_date"],
         error=job.get("error"),
+        agents=job.get("agents") if isinstance(job.get("agents"), list) else [],
+        current_horizon=job.get("current_horizon"),
         waiting_ahead_count=job.get("waiting_ahead_count"),
         scheduled_running_count=job.get("scheduled_running_count"),
         scheduled_concurrency_limit=job.get("scheduled_concurrency_limit"),
@@ -2985,8 +3053,10 @@ async def chat_completions(
                     await _ai_extract_symbol_and_date_streaming(text, config, job_id)
 
                 if not symbol:
+                    error_msg = "抱歉，我没能从您的消息中识别出股票标的。请输入代码（如 600519.SH）或可识别的公司名称。"
+                    _set_job(job_id, status="failed", error=error_msg, finished_at=_utcnow_iso())
                     _emit_job_event(job_id, "job.failed", {
-                        "error": "抱歉，我没能从您的消息中识别出股票标的。请输入代码（如 600519.SH）或可识别的公司名称。"
+                        "error": error_msg
                     })
                     return
 
@@ -3031,15 +3101,11 @@ async def chat_completions(
                     constraints=merged_user_context.get("constraints", []),
                     user_notes=merged_user_context.get("user_notes"),
                 )
-                now = _utcnow_iso()
                 _set_job(
                     job_id,
                     job_id=job_id,
                     user_id=current_user.id,
                     status="pending",
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
                     symbol=analyze_req.symbol,
                     trade_date=analyze_req.trade_date,
                     error=None,
@@ -3054,8 +3120,26 @@ async def chat_completions(
                 await _run_job(job_id, analyze_req, True, True, current_user.id, "chat")
             except Exception as exc:
                 _log(f"[chat] _extract_and_run failed: {exc}")
+                _set_job(job_id, status="failed", error=str(exc), finished_at=_utcnow_iso())
                 _emit_job_event(job_id, "job.failed", {"error": str(exc)})
 
+        now = _utcnow_iso()
+        _set_job(
+            job_id,
+            job_id=job_id,
+            user_id=current_user.id,
+            status="pending",
+            created_at=now,
+            started_at=None,
+            finished_at=None,
+            symbol="",
+            trade_date="",
+            error=None,
+            result=None,
+            decision=None,
+            agents=[],
+            current_horizon=None,
+        )
         _create_tracked_task(_extract_and_run())
         return StreamingResponse(
             _stream_job_events(job_id),

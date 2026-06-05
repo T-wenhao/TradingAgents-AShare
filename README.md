@@ -104,12 +104,15 @@ docker run -d -p 8000:8000 \
   -v $(pwd)/data:/app/data \
   -e DATABASE_URL="sqlite:///./data/tradingagents.db" \
   -e TA_APP_SECRET_KEY="${TA_APP_SECRET_KEY}" \
+  -e TA_JOB_TIMEOUT="1800" \
   ghcr.io/kylinmountain/tradingagents-ashare:latest
 ```
 
 访问 `http://localhost:8000` 即可使用。
 
 > **`TA_APP_SECRET_KEY`**：用于加密用户 LLM API Key 和签发登录 JWT。不设置时使用内置默认密钥（仅适合本地开发）。生产环境务必设置，且不可更改。
+
+> **`TA_JOB_TIMEOUT`**：单个分析任务后台超时秒数，默认 `1800`（30 分钟）。如果日志仍提示“超过 600 秒”，通常是部署环境显式设置了 `TA_JOB_TIMEOUT=600` 或容器镜像尚未更新。
 
 > **LLM 配置**：启动后在前端"设置"页面配置模型厂商、API Key 和模型名称即可，无需环境变量预设。
 

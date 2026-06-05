@@ -169,6 +169,49 @@ class TestAnalyzeEndpoint:
         result = _wait_job(self.client, self.token, job_id)
         assert result["result"]["selected_analysts"] == ["market", "news"]
 
+    def test_job_status_includes_latest_agent_snapshot(self):
+        """Polling job status returns the latest agent progress for page refresh recovery."""
+        from api.main import _emit_job_event, _set_job
+
+        current_user = self.client.get("/v1/auth/me", headers=self.headers).json()
+        job_id = uuid4().hex
+        now = datetime.now(timezone.utc).isoformat()
+        _set_job(
+            job_id,
+            user_id=current_user["id"],
+            status="running",
+            created_at=now,
+            started_at=now,
+            finished_at=None,
+            symbol="600519.SH",
+            trade_date="2024-01-15",
+            error=None,
+        )
+        _emit_job_event(
+            job_id,
+            "agent.snapshot",
+            {
+                "horizon": "short",
+                "agents": [
+                    {"team": "Analyst Team", "agent": "Market Analyst", "status": "pending"},
+                    {"team": "Research Team", "agent": "Bull Researcher", "status": "pending"},
+                ],
+            },
+        )
+        _emit_job_event(
+            job_id,
+            "agent.status",
+            {"agent": "Market Analyst", "status": "in_progress", "horizon": "short"},
+        )
+
+        r = self.client.get(f"/v1/jobs/{job_id}", headers=self.headers)
+
+        assert r.status_code == 200
+        body = r.json()
+        assert body["current_horizon"] == "short"
+        market = next(agent for agent in body["agents"] if agent["agent"] == "Market Analyst")
+        assert market["status"] == "in_progress"
+
     def test_dry_run_merges_imported_position_context_for_manual_analysis(self):
         current_user = self.client.get("/v1/auth/me", headers=self.headers).json()
         now = datetime.now(timezone.utc)

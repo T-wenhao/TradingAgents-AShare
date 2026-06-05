@@ -146,6 +146,21 @@ const initialAgents: Agent[] = [
     { id: 'portfolio_manager', name: 'Portfolio Manager', team: 'Portfolio Management', status: 'pending' },
 ]
 
+function isActiveJobStatus(status?: JobStatus['status'] | null) {
+    return status === 'pending' || status === 'running'
+}
+
+function hasActivePersistedJob(state: Partial<AnalysisState>) {
+    return Boolean(
+        state.currentJobId &&
+        (
+            state.isAnalyzing ||
+            state.analysisRunState === 'running' ||
+            isActiveJobStatus(state.jobStatus?.status)
+        )
+    )
+}
+
 // Debounced localStorage storage to avoid blocking the main thread on every token
 function createDebouncedStorage(delay = 800) {
     let pending: [string, string] | null = null
@@ -192,7 +207,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     analysisRunError: null,
     currentHorizon: null,
 
-    setCurrentJobId: (jobId) => set({ currentJobId: jobId }),
+    setCurrentJobId: (jobId) => set({ currentJobId: jobId, ...(jobId ? {} : { jobStatus: null }) }),
 
     setCurrentSymbol: (symbol) => set({ currentSymbol: symbol }),
 
@@ -431,6 +446,7 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     setAnalysisRunState: (analysisRunState, error = null) => set({
         analysisRunState,
         analysisRunError: analysisRunState === 'failed' ? error : null,
+        ...(analysisRunState === 'completed' || analysisRunState === 'failed' ? { currentJobId: null } : {}),
     }),
 
     setCurrentHorizon: (horizon) => set({ currentHorizon: horizon }),
@@ -463,6 +479,12 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     version: 1,
     storage: createJSONStorage(() => debouncedStorage),
     partialize: (state) => ({
+        currentJobId: hasActivePersistedJob(state) ? state.currentJobId : null,
+        jobStatus: hasActivePersistedJob(state) ? state.jobStatus : null,
+        agents: hasActivePersistedJob(state) ? state.agents : initialAgents,
+        isAnalyzing: hasActivePersistedJob(state),
+        analysisRunState: hasActivePersistedJob(state) ? 'running' : 'idle',
+        currentHorizon: hasActivePersistedJob(state) ? state.currentHorizon : null,
         currentSymbol: state.currentSymbol,
         report: state.report,
         riskItems: state.riskItems,
@@ -476,21 +498,25 @@ export const useAnalysisStore = create<AnalysisState>()(persist((set) => ({
     }),
     merge: (persistedState, currentState) => {
         const persisted = (persistedState ?? {}) as Partial<AnalysisState>
+        const restoreActiveJob = hasActivePersistedJob(persisted)
         return {
             ...currentState,
             ...persisted,
-            currentJobId: null,
-            jobStatus: null,
-            agents: initialAgents.map(a => ({ ...a, status: 'pending' })),
+            currentJobId: restoreActiveJob ? persisted.currentJobId ?? null : null,
+            jobStatus: restoreActiveJob ? persisted.jobStatus ?? null : null,
+            agents: restoreActiveJob && Array.isArray(persisted.agents)
+                ? persisted.agents
+                : initialAgents.map(a => ({ ...a, status: 'pending' })),
             streamingSections: {},
             debateMessages: {},
-        debateScrollTick: 0,
+            debateScrollTick: 0,
             milestones: [],
             logs: [],
-            isAnalyzing: false,
+            isAnalyzing: restoreActiveJob,
             isConnected: false,
-            analysisRunState: 'idle',
+            analysisRunState: restoreActiveJob ? 'running' : 'idle',
             analysisRunError: null,
+            currentHorizon: restoreActiveJob ? persisted.currentHorizon ?? null : null,
             chatMessages: persisted.chatMessages?.length ? persisted.chatMessages : currentState.chatMessages,
         }
     },

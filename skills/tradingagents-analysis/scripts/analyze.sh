@@ -14,7 +14,7 @@
 #   TRADINGAGENTS_TOKEN   (必填) API 令牌
 #   TRADINGAGENTS_API_URL (可选) 默认 https://api.510168.xyz
 #   POLL_INTERVAL         (可选) 轮询间隔秒数，默认 15
-#   POLL_TIMEOUT          (可选) 最大等待秒数，默认 600
+#   POLL_TIMEOUT          (可选) 最大等待秒数，默认 1800
 
 set -euo pipefail
 
@@ -26,7 +26,7 @@ HORIZONS="${3:-short}"
 API_URL="${TRADINGAGENTS_API_URL:-https://api.510168.xyz}"
 TOKEN="${TRADINGAGENTS_TOKEN:?请设置 TRADINGAGENTS_TOKEN 环境变量}"
 INTERVAL="${POLL_INTERVAL:-15}"
-TIMEOUT="${POLL_TIMEOUT:-600}"
+TIMEOUT="${POLL_TIMEOUT:-1800}"
 
 # ---------- 工具函数 ----------
 

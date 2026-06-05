@@ -1,12 +1,15 @@
 import { ReactNode } from 'react'
 import Sidebar from './Sidebar'
 import Header from './Header'
+import { useAnalysisJobRecovery } from '@/hooks/useAnalysisJobRecovery'
 
 interface LayoutProps {
     children: ReactNode
 }
 
 export default function Layout({ children }: LayoutProps) {
+    useAnalysisJobRecovery()
+
     return (
         <div className="min-h-screen bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-slate-100">
             <Sidebar />

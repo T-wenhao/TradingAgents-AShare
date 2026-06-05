@@ -61,6 +61,45 @@ def _parse_csv_to_dataframe(raw_csv: str) -> Optional[pd.DataFrame]:
     return df
 
 
+def _format_recent_price_volume(df: pd.DataFrame, days: int = 10) -> str:
+    """Format recent OHLCV rows as fallback context for fund-flow failures."""
+    if df is None or df.empty:
+        return "最近量价数据不可用"
+
+    available_cols = [c for c in ["date", "open", "high", "low", "close", "volume", "turnover_rate"] if c in df.columns]
+    if not available_cols:
+        return "最近量价数据不可用"
+
+    recent = df.tail(days).copy()
+    for col in ["open", "high", "low", "close", "volume", "turnover_rate"]:
+        if col in recent.columns:
+            recent[col] = pd.to_numeric(recent[col], errors="coerce")
+
+    if "close" in recent.columns:
+        recent["pct_change"] = recent["close"].pct_change() * 100
+    if "volume" in recent.columns:
+        vol_ma = pd.to_numeric(df["volume"], errors="coerce").rolling(20).mean().tail(days)
+        recent["volume_ratio"] = recent["volume"].to_numpy() / vol_ma.to_numpy()
+
+    output_cols = [c for c in [
+        "date", "open", "high", "low", "close", "pct_change", "volume", "volume_ratio", "turnover_rate"
+    ] if c in recent.columns]
+    display = recent[output_cols].copy()
+    rename = {
+        "date": "日期",
+        "open": "开盘",
+        "high": "最高",
+        "low": "最低",
+        "close": "收盘",
+        "pct_change": "涨跌幅%",
+        "volume": "成交量",
+        "volume_ratio": "量比(20日)",
+        "turnover_rate": "换手率",
+    }
+    display = display.rename(columns=rename)
+    return "最近量价反馈数据：\n" + display.to_string(index=False)
+
+
 # ── VPA (Volume Price Analysis) 预计算 ──────────────────────────
 
 
@@ -338,10 +377,13 @@ def _fetch_all(ticker: str, trade_date: str) -> Dict[str, Any]:
     # ── VPA 预计算指标 ──────────────────────────────
     try:
         if df is not None:
+            results["price_volume_recent"] = _format_recent_price_volume(df.copy())
             results["vpa_indicators"] = _compute_vpa_indicators(df.copy())
         else:
+            results["price_volume_recent"] = "最近量价数据不可用"
             results["vpa_indicators"] = "VPA 数据不足"
     except Exception as e:
+        results["price_volume_recent"] = f"最近量价数据计算失败：{e}"
         results["vpa_indicators"] = f"VPA 计算失败：{e}"
 
     print(f"[Timer] Total Data Collection for {ticker} took {time.time() - fetch_start:.2f}s")

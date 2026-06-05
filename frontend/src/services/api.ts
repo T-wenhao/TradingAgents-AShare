@@ -10,7 +10,7 @@ export function getBaseUrl(): string {
 }
 
 
-function getAuthToken(): string | null {
+export function getAuthToken(): string | null {
     try {
         return localStorage.getItem('ta-access-token')
     } catch {
