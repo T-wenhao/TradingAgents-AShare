@@ -3,6 +3,7 @@
 import logging
 import os
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Generator
 
 from sqlalchemy import Boolean, create_engine, Column, String, DateTime, Text, Integer, Float, JSON, UniqueConstraint, event, text
@@ -89,154 +90,94 @@ class get_db_ctx:
 
 
 def init_db() -> None:
-    """Initialize database tables."""
-    Base.metadata.create_all(bind=engine)
-    _ensure_report_schema()
-    _ensure_user_schema()
+    """Initialize database tables and run Alembic migrations.
 
-
-def _ensure_report_schema() -> None:
-    """Add lightweight columns for existing SQLite deployments without migrations."""
-    try:
-        with engine.begin() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(reports)"))}
-            if "direction" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN direction VARCHAR(50)"))
-            if "status" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN status VARCHAR(20) DEFAULT 'completed'"))
-            if "error" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN error TEXT"))
-            if "analyst_traces" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN analyst_traces JSON"))
-            if "macro_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN macro_report TEXT"))
-            if "smart_money_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN smart_money_report TEXT"))
-            if "game_theory_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN game_theory_report TEXT"))
-            if "volume_price_report" not in columns:
-                conn.execute(text("ALTER TABLE reports ADD COLUMN volume_price_report TEXT"))
-    except Exception as e:
-        logger.error("Failed to ensure report schema: %s", e)
-
-
-def _ensure_user_schema() -> None:
-    """Add columns to users table for existing SQLite deployments without migrations."""
-    try:
-        with engine.begin() as conn:
-            columns = {row[1] for row in conn.execute(text("PRAGMA table_info(users)"))}
-            if "last_login_ip" not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN last_login_ip VARCHAR(45)"))
-            if "email_report_enabled" not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN email_report_enabled BOOLEAN NOT NULL DEFAULT 1"))
-            if "wecom_report_enabled" not in columns:
-                conn.execute(text("ALTER TABLE users ADD COLUMN wecom_report_enabled BOOLEAN NOT NULL DEFAULT 1"))
-            llm_columns = {row[1] for row in conn.execute(text("PRAGMA table_info(user_llm_configs)"))}
-            if "wecom_webhook_encrypted" not in llm_columns:
-                conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN wecom_webhook_encrypted TEXT"))
-            if "default_analysts" not in llm_columns:
-                conn.execute(text("ALTER TABLE user_llm_configs ADD COLUMN default_analysts TEXT"))
-    except Exception as e:
-        logger.error("Failed to ensure user schema: %s", e)
-
-    _migrate_tokens_to_hashed()
-    _migrate_api_keys_reencrypt()
-
-
-def _migrate_tokens_to_hashed() -> None:
-    """Migrate plaintext API tokens to HMAC-SHA256 hashed storage."""
-    import hashlib, hmac
-    try:
-        with engine.begin() as conn:
-            # Add token_hint column if missing
-            token_cols = {row[1] for row in conn.execute(text("PRAGMA table_info(user_tokens)"))}
-            if "token_hint" not in token_cols:
-                conn.execute(text("ALTER TABLE user_tokens ADD COLUMN token_hint VARCHAR(8)"))
-
-            # Detect un-migrated rows: plaintext tokens start with "ta-sk-"
-            rows = conn.execute(text("SELECT id, token FROM user_tokens WHERE token LIKE 'ta-sk-%'")).fetchall()
-            if not rows:
-                return
-            from api.services.auth_service import _secret_key
-            key = _secret_key().encode("utf-8")
-            for row_id, plaintext in rows:
-                token_hash = hmac.new(key, plaintext.encode("utf-8"), hashlib.sha256).hexdigest()
-                hint = plaintext[-4:]
-                conn.execute(
-                    text("UPDATE user_tokens SET token = :hash, token_hint = :hint WHERE id = :id"),
-                    {"hash": token_hash, "hint": hint, "id": row_id},
-                )
-            logger.info("[security] Migrated %s API tokens from plaintext to hashed storage.", len(rows))
-    except Exception as e:
-        logger.error("Token hash migration failed: %s", e)
-
-
-def _migrate_api_keys_reencrypt() -> None:
-    """Re-encrypt user secrets when TA_APP_SECRET_KEY changes.
-
-    On startup, if a custom secret is configured, tries to decrypt each secret
-    with the current secret. If that fails, tries the default secret (old data).
-    If the default key works, re-encrypts with the current key and writes back.
+    For new deployments: creates all tables via Alembic upgrade.
+    For existing deployments: stamps baseline first, then applies pending migrations.
     """
-    from api.services.auth_service import (
-        is_custom_secret_configured, decrypt_secret,
-        decrypt_secret_with_fallback, encrypt_secret,
-    )
-    if not is_custom_secret_configured():
+    # Stamp existing pre-Alembic databases BEFORE running upgrade,
+    # so Alembic does not try to re-create existing tables.
+    _stamp_if_legacy()
+    _run_alembic_upgrade()
+
+
+def _get_alembic_config() -> "Config | None":
+    """Build an Alembic Config pointing to our project's alembic.ini."""
+    from alembic.config import Config
+
+    project_root = Path(__file__).resolve().parent.parent
+    alembic_ini = project_root / "alembic.ini"
+    if not alembic_ini.exists():
+        return None
+
+    alembic_cfg = Config(str(alembic_ini))
+    # Ensure script_location is absolute
+    script_location = alembic_cfg.get_main_option("script_location")
+    if script_location and not os.path.isabs(script_location):
+        alembic_cfg.set_main_option("script_location", str(project_root / script_location))
+    alembic_cfg.set_main_option("sqlalchemy.url", DATABASE_URL)
+    return alembic_cfg
+
+
+def _run_alembic_upgrade() -> None:
+    """Run Alembic upgrade to head.
+
+    Uses `command.upgrade` which delegates to env.py. This works for
+    both fresh and legacy databases, and is consistent with the CLI
+    `alembic upgrade head` behavior.
+    """
+    alembic_cfg = _get_alembic_config()
+    if alembic_cfg is None:
+        logger.warning("alembic.ini not found, falling back to create_all")
+        Base.metadata.create_all(bind=engine)
         return
+
+    try:
+        from alembic import command
+        command.upgrade(alembic_cfg, "head")
+        logger.info("Alembic upgrade to head completed.")
+    except Exception as e:
+        logger.error("Alembic upgrade failed, falling back to create_all: %s", e)
+        Base.metadata.create_all(bind=engine)
+
+
+def _stamp_if_legacy() -> None:
+    """Stamp to head if tables exist but alembic_version does not.
+
+    Handles pre-Alembic deployments: the database already has all tables
+    but no alembic_version tracking table. Without this stamp, the
+    subsequent upgrade would try to CREATE TABLE on existing tables
+    and fail.
+    """
     try:
         with engine.begin() as conn:
-            rows = conn.execute(
-                text(
-                    """
-                    SELECT user_id, api_key_encrypted, wecom_webhook_encrypted
-                    FROM user_llm_configs
-                    WHERE api_key_encrypted IS NOT NULL OR wecom_webhook_encrypted IS NOT NULL
-                    """
-                )
-            ).fetchall()
-            if not rows:
-                return
-            # Quick check: if the first row decrypts fine, likely all are OK already.
-            _, first_api_key, first_wecom_webhook = rows[0]
-            first_secret = first_api_key or first_wecom_webhook
-            if first_secret and decrypt_secret(first_secret) is not None and len(rows) < 50:
-                # Small dataset, still verify all — but for large sets, skip if first is OK
-                pass
-            migrated = 0
-            for user_id, encrypted_api_key, encrypted_wecom_webhook in rows:
-                for column_name, encrypted_value in (
-                    ("api_key_encrypted", encrypted_api_key),
-                    ("wecom_webhook_encrypted", encrypted_wecom_webhook),
-                ):
-                    if not encrypted_value:
-                        continue
-                    if decrypt_secret(encrypted_value) is not None:
-                        continue
-                    plaintext = decrypt_secret_with_fallback(encrypted_value)
-                    if plaintext is None:
-                        logger.warning(
-                            "[security] Cannot decrypt %s for user %s with any known key. Skipping.",
-                            column_name,
-                            user_id,
-                        )
-                        continue
-                    new_encrypted = encrypt_secret(plaintext)
-                    if column_name == "api_key_encrypted":
-                        conn.execute(
-                            text("UPDATE user_llm_configs SET api_key_encrypted = :enc WHERE user_id = :uid"),
-                            {"enc": new_encrypted, "uid": user_id},
-                        )
-                    elif column_name == "wecom_webhook_encrypted":
-                        conn.execute(
-                            text("UPDATE user_llm_configs SET wecom_webhook_encrypted = :enc WHERE user_id = :uid"),
-                            {"enc": new_encrypted, "uid": user_id},
-                        )
-                    migrated += 1
-            if migrated:
-                logger.info("[security] Re-encrypted %s user secret(s) with new TA_APP_SECRET_KEY.", migrated)
+            # Does alembic_version already exist?
+            row = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='alembic_version'")
+            ).fetchone()
+            if row is not None:
+                return  # alembic already initialized
+
+            # Do application tables exist? (reports is always created)
+            row = conn.execute(
+                text("SELECT name FROM sqlite_master WHERE type='table' AND name='reports'")
+            ).fetchone()
+            if row is None:
+                return  # fresh database, let upgrade create everything
+
+        # Legacy deployment detected — stamp to first migration as baseline.
+        alembic_cfg = _get_alembic_config()
+        if alembic_cfg is None:
+            return
+
+        from alembic import command
+        # Stamp to the first migration so the second migration (add_critical_indexes)
+        # will run on upgrade to add the new performance indexes.
+        first_rev = "5abbf2fc8477"
+        command.stamp(alembic_cfg, first_rev)
+        logger.info("Stamped legacy database to %s (baseline); pending index migration will apply next.", first_rev)
     except Exception as e:
-        logger.error("User secret re-encryption migration failed: %s", e)
+        logger.warning("Could not stamp legacy database: %s", e)
 
 
 # Report Model
@@ -248,7 +189,7 @@ class ReportDB(Base):
     id = Column(String(36), primary_key=True, index=True)
     user_id = Column(String(64), index=True, nullable=True)  # For future multi-user support
     symbol = Column(String(20), index=True, nullable=False)
-    trade_date = Column(String(10), nullable=False)
+    trade_date = Column(String(10), nullable=False, index=True)  # indexed for date-range report queries
     
     # Task lifecycle info
     status = Column(String(20), default="completed", index=True)  # pending, running, completed, failed
@@ -283,7 +224,7 @@ class ReportDB(Base):
     final_trade_decision = Column(Text, nullable=True)
     
     # Metadata
-    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
+    created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)  # indexed for time-ordered listing
     updated_at = Column(DateTime, default=lambda: datetime.now(timezone.utc), onupdate=lambda: datetime.now(timezone.utc))
     
     def to_dict(self) -> dict:
@@ -390,7 +331,7 @@ class WatchlistItemDB(Base):
 
     id = Column(String(36), primary_key=True)
     user_id = Column(String(64), index=True, nullable=False)
-    symbol = Column(String(20), nullable=False)
+    symbol = Column(String(20), nullable=False, index=True)  # indexed for symbol lookup
     sort_order = Column(Integer, default=0)
     created_at = Column(DateTime, default=lambda: datetime.now(timezone.utc))
 
@@ -405,8 +346,8 @@ class ScheduledAnalysisDB(Base):
     user_id = Column(String(64), index=True, nullable=False)
     symbol = Column(String(20), nullable=False)
     horizon = Column(String(10), default="short")
-    trigger_time = Column(String(5), default="20:00")
-    is_active = Column(Boolean, default=True)
+    trigger_time = Column(String(5), default="20:00", index=True)  # indexed for scheduled-task scanning
+    is_active = Column(Boolean, default=True, index=True)  # indexed together with trigger_time
     last_run_date = Column(String(10), nullable=True)
     last_run_status = Column(String(10), nullable=True)
     last_report_id = Column(String(36), nullable=True)
@@ -460,7 +401,7 @@ class ImportedPortfolioPositionDB(Base):
     id = Column(String(36), primary_key=True)
     user_id = Column(String(64), index=True, nullable=False)
     source = Column(String(32), default="manual", nullable=False)
-    symbol = Column(String(20), nullable=False)
+    symbol = Column(String(20), nullable=False, index=True)  # indexed for symbol-based lookup
     security_name = Column(String(80), nullable=True)
     current_position = Column(Float, nullable=True)
     available_position = Column(Float, nullable=True)
