@@ -5,6 +5,8 @@ docs/
 graph_checkpoints.db
 graph_checkpoints.db-shm
 graph_checkpoints.db-wal
+board_gold_results/
+data/board_gold/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

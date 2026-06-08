@@ -8,6 +8,7 @@ import Reports from './pages/Reports'
 import Settings from './pages/Settings'
 import Portfolio from './pages/Portfolio'
 import TrackingBoard from './pages/TrackingBoard'
+import GoldBoard from './pages/GoldBoard'
 import Login from './pages/Login'
 import Feedback from './pages/Feedback'
 import Sponsor from './pages/Sponsor'
@@ -61,6 +62,7 @@ function App() {
                   <Route path="/portfolio" element={<Portfolio />} />
                   <Route path="/settings" element={<Settings />} />
                   <Route path="/feedback" element={<Feedback />} />
+                  <Route path="/gold-board" element={<GoldBoard />} />
                 </Routes>
               </Layout>
             </RequireAuth>

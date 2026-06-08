@@ -1,4 +1,47 @@
-import type { AnalysisRequest, AnalysisResponse, Announcement, AuthUser, AuthVerifyResponse, JobStatus, AnalysisReport, KlineResponse, LatestAnnouncementResponse, PortfolioImportState, PortfolioOverviewResponse, PortfolioPositionInput, Report, ReportDetail, ReportListResponse, RuntimeConfig, RuntimeConfigUpdate, RuntimeConfigUpdateResponse, RuntimeWarmupRequest, RuntimeWarmupResponse, WatchlistItem, WatchlistBatchResponse, ScheduledAnalysis, ScheduledBatchTriggerResponse, StockSearchResult, TrackingBoardResponse, UserToken, UserTokenCreateRequest, WecomWarmupRequest, WecomWarmupResponse, FeedbackItem, FeedbackListResponse, FeedbackUnreadResponse } from '@/types'
+import type {
+    AnalysisRequest,
+    AnalysisResponse,
+    Announcement,
+    AuthUser,
+    AuthVerifyResponse,
+    BoardGoldCacheScriptsResponse,
+    BoardGoldCacheStats,
+    BoardGoldCacheUpdateRequest,
+    BoardGoldCacheUpdateTask,
+    BoardGoldExitScanResponse,
+    BoardGoldLatestResultResponse,
+    BoardGoldScanRequest,
+    BoardGoldScanTask,
+    BoardGoldStrategiesResponse,
+    FeedbackItem,
+    FeedbackListResponse,
+    FeedbackUnreadResponse,
+    JobStatus,
+    AnalysisReport,
+    KlineResponse,
+    LatestAnnouncementResponse,
+    PortfolioImportState,
+    PortfolioOverviewResponse,
+    PortfolioPositionInput,
+    Report,
+    ReportDetail,
+    ReportListResponse,
+    RuntimeConfig,
+    RuntimeConfigUpdate,
+    RuntimeConfigUpdateResponse,
+    RuntimeWarmupRequest,
+    RuntimeWarmupResponse,
+    WatchlistItem,
+    WatchlistBatchResponse,
+    ScheduledAnalysis,
+    ScheduledBatchTriggerResponse,
+    StockSearchResult,
+    TrackingBoardResponse,
+    UserToken,
+    UserTokenCreateRequest,
+    WecomWarmupRequest,
+    WecomWarmupResponse,
+} from '@/types'
 
 export function getBaseUrl(): string {
     const envUrl = (import.meta.env.VITE_API_URL as string) || ''
@@ -254,6 +297,60 @@ class ApiService {
 
     async getDashboardTrackingBoard(): Promise<TrackingBoardResponse> {
         return this.request<TrackingBoardResponse>('/v1/dashboard/tracking-board')
+    }
+
+    // Board-Gold strategy scanner
+    async getBoardGoldStrategies(): Promise<BoardGoldStrategiesResponse> {
+        return this.request<BoardGoldStrategiesResponse>('/v1/board-gold/strategies')
+    }
+
+    async getBoardGoldCacheStats(): Promise<BoardGoldCacheStats> {
+        return this.request<BoardGoldCacheStats>('/v1/board-gold/cache/stats')
+    }
+
+    async getBoardGoldCacheScripts(): Promise<BoardGoldCacheScriptsResponse> {
+        return this.request<BoardGoldCacheScriptsResponse>('/v1/board-gold/cache/scripts')
+    }
+
+    async startBoardGoldCacheUpdate(request: BoardGoldCacheUpdateRequest = {}): Promise<BoardGoldCacheUpdateTask> {
+        return this.request<BoardGoldCacheUpdateTask>('/v1/board-gold/cache/update', {
+            method: 'POST',
+            body: JSON.stringify(request),
+        })
+    }
+
+    async getBoardGoldCacheUpdateStatus(taskId: string): Promise<BoardGoldCacheUpdateTask> {
+        return this.request<BoardGoldCacheUpdateTask>(`/v1/board-gold/cache/update/${taskId}`)
+    }
+
+    async startBoardGoldScan(request: BoardGoldScanRequest): Promise<BoardGoldScanTask> {
+        return this.request<BoardGoldScanTask>('/v1/board-gold/scan', {
+            method: 'POST',
+            body: JSON.stringify(request),
+        })
+    }
+
+    async getBoardGoldScanStatus(taskId: string): Promise<BoardGoldScanTask> {
+        return this.request<BoardGoldScanTask>(`/v1/board-gold/scan/${taskId}`)
+    }
+
+    async getBoardGoldLatestResult(): Promise<BoardGoldLatestResultResponse> {
+        return this.request<BoardGoldLatestResultResponse>('/v1/board-gold/results/latest')
+    }
+
+    async scanBoardGoldExits(
+        entries: Array<Record<string, unknown>>,
+        exitStrategy = 'fixed_exit',
+        days = 120,
+    ): Promise<BoardGoldExitScanResponse> {
+        return this.request<BoardGoldExitScanResponse>('/v1/board-gold/exit-scan', {
+            method: 'POST',
+            body: JSON.stringify({
+                entries,
+                exit_strategy: exitStrategy,
+                days,
+            }),
+        })
     }
 
     // Stock Search

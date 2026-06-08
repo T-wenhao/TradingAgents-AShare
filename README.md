@@ -37,6 +37,10 @@
 
 支持导入持仓数据，自动记录持仓、成本价与仓位占比，并可一键将持仓标的补齐到定时分析列表。控制台会展示跟踪看板摘要，完整看板页支持查看实时价格、当日区间、持仓盈亏与上一交易日报告区间，方便盘中快速跟踪。
 
+### 黄金信号扫描
+
+集成 `board_has_gold` 的本地缓存形态策略，支持三阴不破阳、一夜持股、涨停缩量阳、涨停金凤凰、三倍量突破、涨停缩量阴等入场扫描，并提供固定止盈止损、移动止盈和金凤凰离场信号。扫描只读取本地 parquet 缓存，使用 `TA_BOARD_GOLD_DATA_DIR` 指向包含 `stock_daily/`、`stock_daily_raw/`、`stock_basic/` 的目录；缓存更新由后端一键编排，自动按旧采集器、BaoStock、因子计算和质量检查路由，前端不需要选择具体数据源。
+
 ### 结构化研报管理
 
 分析结果结构化存储，支持按标的、日期检索历史研报，决策卡片一目了然地展示方向、置信度、目标价与止损价。
@@ -118,6 +122,8 @@ docker run -d -p 8000:8000 \
 
 > **邮箱验证码**：未配置 SMTP（`MAIL_HOST` 等）时，验证码会在前端登录页直接显示为 `开发环境验证码：xxxxxx`，本地使用无需配置邮件服务器。如果需要真实邮件投递，参考 `.env.example` 配置 `MAIL_HOST` / `MAIL_USER` / `MAIL_PASS` 等并通过 `-e` 注入容器。
 
+> **黄金信号扫描**：设置 `TA_BOARD_GOLD_DATA_DIR` 后，前端侧边栏会显示“黄金信号”。示例：`TA_BOARD_GOLD_DATA_DIR=/Users/mingwen/workspace/board_has_gold/data`。如果沿用旧项目目录，缓存脚本会默认从 `/Users/mingwen/workspace/board_has_gold/cache/scripts` 推导；也可显式设置 `TA_BOARD_GOLD_CACHE_SCRIPTS_DIR`。缓存更新入口是一键自动任务，默认不限制股票数量；连续失败达到阈值后会停止并在任务日志里保留错误。扫描结果默认写入 `board_gold_results/`，本地缓存和结果目录不会提交到 git。
+
 ### 源码安装
 
 ```bash
@@ -156,6 +162,9 @@ uv run python -m uvicorn api.main:app --port 8000
 | 批量获取最新报告 | `POST /v1/reports/latest-by-symbols` |
 | 持仓导入 | `GET/POST/DELETE /v1/portfolio/imports` |
 | 跟踪看板摘要/明细 | `GET /v1/dashboard/tracking-board` |
+| 黄金信号策略/缓存 | `GET /v1/board-gold/strategies`、`GET /v1/board-gold/cache/stats`、`GET /v1/board-gold/cache/scripts` |
+| 黄金信号缓存更新 | `POST /v1/board-gold/cache/update`、`GET /v1/board-gold/cache/update/{task_id}` |
+| 黄金信号扫描 | `POST /v1/board-gold/scan`、`GET /v1/board-gold/scan/{task_id}`、`GET /v1/board-gold/results/latest` |
 | 批量定时任务操作 | `PATCH /v1/scheduled/batch`、`POST /v1/scheduled/batch/delete`、`POST /v1/scheduled/batch/trigger` |
 | 模型 warmup | `POST /v1/config/warmup` |
 

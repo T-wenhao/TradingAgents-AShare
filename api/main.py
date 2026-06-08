@@ -42,6 +42,7 @@ import pandas as pd
 from api.database import UserDB, UserLLMConfigDB, VersionStatsDB, ReportDB, ImportedPortfolioPositionDB, FeedbackDB, SponsorDB, init_db, get_db, get_db_ctx
 from api.job_store import get_job_store as _new_job_store
 from api.services import auth_service, portfolio_import_service, report_service, token_service, watchlist_service, scheduled_service, tracking_board_service, feedback_service, sponsor_service
+from api.services.board_gold_service import board_gold_service
 
 def _get_real_ip(request: Request) -> Optional[str]:
     """Extract real client IP, preferring Cloudflare/proxy headers."""
@@ -199,6 +200,17 @@ async def _run_manual_trigger(
         logger.error(f"[Manual Trigger] Failed {symbol}: {e}\n{traceback.format_exc()}")
         with get_db_ctx() as db:
             scheduled_service.record_manual_test_result(db, task_id, "failed")
+
+
+async def _run_scheduled_analysis_once(
+    task: dict,
+    requested_trade_date: str,
+    job_id: str,
+    *,
+    mark_schedule_run: bool = False,
+) -> None:
+    """Compatibility wrapper for manual scheduled-analysis trigger jobs."""
+    await _run_manual_trigger(task, requested_trade_date, job_id)
 
 
 @asynccontextmanager
@@ -661,6 +673,25 @@ class KlineResponse(BaseModel):
     start_date: str
     end_date: str
     candles: List[Dict[str, Any]]
+
+
+class BoardGoldScanRequest(BaseModel):
+    strategies: List[str] = Field(default_factory=list)
+    symbols: List[str] = Field(default_factory=list)
+    days: int = Field(default=80, ge=20, le=260)
+    target_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    max_stocks: Optional[int] = Field(default=None, ge=1, le=6000)
+
+
+class BoardGoldExitScanRequest(BaseModel):
+    exit_strategy: str = Field(default="fixed_exit")
+    entries: List[Dict[str, Any]] = Field(default_factory=list)
+    days: int = Field(default=120, ge=20, le=320)
+
+
+class BoardGoldCacheUpdateRequest(BaseModel):
+    script: str = Field(default="auto_full")
+    args: Optional[List[str]] = None
 
 
 # Report API Models
@@ -2731,6 +2762,99 @@ def get_hot_stocks(source: str = "em", limit: int = 30) -> Dict:
     )
 
 
+# ── Board-Gold Strategy Scanner ──────────────────────────────────────────────
+
+@app.get("/v1/board-gold/strategies")
+def get_board_gold_strategies(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    return board_gold_service.scanner.strategy_info()
+
+
+@app.get("/v1/board-gold/cache/stats")
+def get_board_gold_cache_stats(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    return board_gold_service.cache_stats()
+
+
+@app.get("/v1/board-gold/cache/scripts")
+def get_board_gold_cache_scripts(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    return board_gold_service.list_cache_scripts()
+
+
+@app.post("/v1/board-gold/cache/update")
+def start_board_gold_cache_update(
+    request: BoardGoldCacheUpdateRequest,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    try:
+        task = board_gold_service.start_cache_update(script=request.script, args=request.args)
+        return task.to_dict()
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
+@app.get("/v1/board-gold/cache/update/{task_id}")
+def get_board_gold_cache_update_status(
+    task_id: str,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    task = board_gold_service.get_cache_update_task(task_id)
+    if not task:
+        raise HTTPException(404, "未找到缓存更新任务")
+    return task.to_dict()
+
+
+@app.post("/v1/board-gold/scan")
+def start_board_gold_scan(
+    request: BoardGoldScanRequest,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    params = request.model_dump()
+    if not params.get("strategies"):
+        params["strategies"] = None
+    if not params.get("symbols"):
+        params["symbols"] = None
+    task = board_gold_service.start_scan(params)
+    return task.to_dict()
+
+
+@app.get("/v1/board-gold/scan/{task_id}")
+def get_board_gold_scan_status(
+    task_id: str,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    task = board_gold_service.get_task(task_id)
+    if not task:
+        raise HTTPException(404, "未找到扫描任务")
+    return task.to_dict()
+
+
+@app.get("/v1/board-gold/results/latest")
+def get_board_gold_latest_result(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    return {"result": board_gold_service.scanner.latest_result()}
+
+
+@app.post("/v1/board-gold/exit-scan")
+def scan_board_gold_exit_signals(
+    request: BoardGoldExitScanRequest,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    try:
+        return board_gold_service.scanner.scan_exits(
+            entries=request.entries,
+            exit_strategy_name=request.exit_strategy,
+            days=request.days,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+
+
 @app.post("/v1/analyze", response_model=AnalyzeResponse)
 async def analyze(
     request: AnalyzeRequest,
@@ -4343,10 +4467,11 @@ async def trigger_scheduled_analyses_batch(
             {"job_id": job_id, "symbol": task["symbol"], "trade_date": actual_trade_date},
         )
         _create_tracked_task(
-            _run_manual_trigger(
+            _run_scheduled_analysis_once(
                 task_snapshot,
                 requested_trade_date,
                 job_id,
+                mark_schedule_run=False,
             )
         )
 
@@ -4405,10 +4530,11 @@ async def trigger_scheduled_analysis_once(
         {"job_id": job_id, "symbol": task["symbol"], "trade_date": actual_trade_date},
     )
     _create_tracked_task(
-        _run_manual_trigger(
+        _run_scheduled_analysis_once(
             task_snapshot,
             requested_trade_date,
             job_id,
+            mark_schedule_run=False,
         )
     )
     return AnalyzeResponse(job_id=job_id, status="pending", created_at=now)

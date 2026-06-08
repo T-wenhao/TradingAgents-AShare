@@ -26,6 +26,7 @@ Core user flow:
 | Database | `api/database.py` | SQLAlchemy models and migrations-on-startup |
 | Reports | `api/services/report_service.py` | Report persistence, recovery, structured extraction |
 | Scheduler | `scheduler/main.py` | Independent scheduled-analysis process |
+| Board-gold scanner | `api/services/board_gold_service.py`, `frontend/src/pages/GoldBoard.tsx` | Local parquet pattern scanner from board_has_gold |
 | Core graph | `tradingagents/graph/` | LangGraph setup, propagation, data collection |
 | Analyst agents | `tradingagents/agents/analysts/` | Market, fundamentals, macro, smart money, etc. |
 | Data providers | `tradingagents/dataflows/providers/` | AkShare, BaoStock, yfinance, Alpha Vantage |
@@ -55,6 +56,7 @@ uv run pytest -q
 # Run focused tests
 uv run pytest -q tests/test_api_smoke.py
 uv run pytest -q tests/test_realtime_quote_provider.py tests/test_data_collector.py
+uv run pytest -q tests/test_board_gold_service.py tests/test_board_gold_api.py
 
 # Frontend
 cd frontend
@@ -82,6 +84,9 @@ TA_APP_SECRET_KEY=
 TA_JOB_TIMEOUT=1800
 DATABASE_URL=sqlite:///./tradingagents.db
 REDIS_URL=
+TA_BOARD_GOLD_DATA_DIR=./data/board_gold
+TA_BOARD_GOLD_RESULTS_DIR=./board_gold_results
+TA_BOARD_GOLD_CACHE_SCRIPTS_DIR=./cache/board_gold/scripts
 ```
 
 Supported `TA_LLM_PROVIDER` values are:
@@ -166,6 +171,24 @@ and use price/volume feedback from the same `DataCollector` pool as weak
 evidence. Do not let an LLM silently infer institutional flow from a single VWMA
 value.
 
+Board-gold scanner notes:
+
+- `api/services/board_gold_service.py` ports the standalone `board_has_gold`
+  strategy scanner into this product. Keep it local-cache based: it reads
+  parquet files under `TA_BOARD_GOLD_DATA_DIR` and must not fan out live AkShare
+  requests during scans.
+- Cache refresh is exposed as a one-click automatic task. Keep provider routing
+  behind the backend: legacy scripts run from `TA_BOARD_GOLD_CACHE_SCRIPTS_DIR`,
+  while the internal `baostock_daily` task writes BaoStock daily data into the
+  same `stock_daily/` and `stock_daily_raw/` parquet cache. The frontend should
+  not ask users to choose provider scripts or stock-count limits for normal
+  refreshes. Preserve conservative sleeps, single-worker execution, consecutive
+  failure stops, and detailed logs.
+- The frontend route is `/gold-board`; keep the UI aligned with the existing
+  dense slate workbench style rather than the old Flask/Jinja templates.
+- Do not commit `data/board_gold/` or `board_gold_results/`; both are local
+  runtime artifacts.
+
 ## Testing Guidance
 
 Pick tests based on the changed surface:
@@ -176,6 +199,7 @@ Pick tests based on the changed surface:
 | Redis job store | `uv run pytest -q tests/test_job_store_redis.py` |
 | Report recovery/persistence | `uv run pytest -q tests/test_report_recovery.py` |
 | Data provider logic | `uv run pytest -q tests/test_realtime_quote_provider.py tests/test_data_collector.py` |
+| Board-gold scanner | `uv run pytest -q tests/test_board_gold_service.py tests/test_board_gold_api.py` |
 | Scheduler | `uv run pytest -q tests/test_scheduled_queue.py tests/test_watchlist_scheduled.py` |
 | Frontend state/UI | `cd frontend && npm run build` plus scoped eslint |
 

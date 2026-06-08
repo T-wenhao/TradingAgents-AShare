@@ -559,6 +559,146 @@ export interface TrackingBoardResponse {
     items: TrackingBoardItem[]
 }
 
+// Board-Gold strategy scanner
+export interface BoardGoldStrategyInfo {
+    name: string
+    description: string
+    enabled: boolean
+    params: Record<string, unknown>
+}
+
+export interface BoardGoldStrategiesResponse {
+    entry_strategies: BoardGoldStrategyInfo[]
+    exit_strategies: BoardGoldStrategyInfo[]
+}
+
+export interface BoardGoldCacheStats {
+    data_dir: string
+    available: boolean
+    stock_basic_file: string
+    stock_basic_count: number
+    daily_count: number
+    raw_count: number
+    latest_file_mtime?: string | null
+    cache_scripts_dir?: string
+    cache_scripts_available?: boolean
+}
+
+export interface BoardGoldCacheScriptInfo {
+    name: string
+    label: string
+    description: string
+    default_args: string[]
+    live_data: boolean
+    internal?: boolean
+    available: boolean
+}
+
+export interface BoardGoldCacheScriptsResponse {
+    scripts_dir: string
+    available: boolean
+    scripts: BoardGoldCacheScriptInfo[]
+}
+
+export interface BoardGoldCacheUpdateRequest {
+    script?: string
+    args?: string[] | null
+}
+
+export interface BoardGoldCacheUpdateTask {
+    task_id: string
+    status: 'pending' | 'running' | 'completed' | 'failed'
+    script: string
+    args: string[]
+    created_at: string
+    started_at?: string | null
+    finished_at?: string | null
+    exit_code?: number | null
+    error?: string | null
+    scripts_dir: string
+    cwd: string
+    command: string[]
+    logs: string[]
+}
+
+export interface BoardGoldSignal {
+    strategy: string
+    symbol: string
+    bare_symbol?: string
+    name: string
+    signal_date: string
+    base_date: string
+    price: number | null
+    change_pct: number | null
+    volume: number | null
+    [key: string]: unknown
+}
+
+export interface BoardGoldResult {
+    scan_time: string
+    elapsed_seconds?: number
+    strategies: string[]
+    target_date?: string | null
+    days: number
+    total_stocks: number
+    signals_count: number
+    signals: BoardGoldSignal[]
+    summary: Record<string, {
+        count: number
+        stocks: Array<Record<string, unknown>>
+    }>
+}
+
+export interface BoardGoldScanRequest {
+    strategies?: string[]
+    symbols?: string[]
+    days?: number
+    target_date?: string | null
+    max_stocks?: number | null
+}
+
+export interface BoardGoldScanTask {
+    task_id: string
+    status: 'pending' | 'running' | 'completed' | 'failed'
+    created_at: string
+    started_at?: string | null
+    finished_at?: string | null
+    current: number
+    total: number
+    signals_count: number
+    signals: BoardGoldSignal[]
+    error?: string | null
+    params: BoardGoldScanRequest
+    logs: string[]
+}
+
+export interface BoardGoldLatestResultResponse {
+    result: BoardGoldResult | null
+}
+
+export interface BoardGoldExitSignal {
+    strategy: string
+    symbol: string
+    bare_symbol?: string
+    name: string
+    entry_date: string
+    entry_price: number | null
+    exit_date: string
+    exit_price: number | null
+    exit_type: string
+    profit_pct: number | null
+    hold_days: number | null
+    [key: string]: unknown
+}
+
+export interface BoardGoldExitScanResponse {
+    scan_time: string
+    exit_strategy: string
+    entries_count: number
+    exit_signals_count: number
+    exit_signals: BoardGoldExitSignal[]
+}
+
 // Runtime config
 export interface RuntimeConfig {
     llm_provider: string
