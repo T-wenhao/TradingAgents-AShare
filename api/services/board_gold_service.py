@@ -1502,6 +1502,16 @@ class BoardGoldTaskManager:
         with self.lock:
             return self.cache_tasks.get(task_id)
 
+    def get_current_cache_update_task(self) -> Optional[CacheUpdateTask]:
+        with self.lock:
+            return next(
+                (
+                    task for task in self.cache_tasks.values()
+                    if task.status in {"pending", "running"}
+                ),
+                None,
+            )
+
     def _run_task(self, task_id: str) -> None:
         with self.lock:
             task = self.tasks[task_id]

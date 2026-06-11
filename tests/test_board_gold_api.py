@@ -192,6 +192,9 @@ class _FakeBoardGoldService:
     def get_cache_update_task(self, task_id):
         return self.cache_task if task_id == self.cache_task.task_id else None
 
+    def get_current_cache_update_task(self):
+        return self.cache_task
+
 
 def test_board_gold_endpoints_require_auth():
     client = _get_client()
@@ -237,6 +240,10 @@ def test_board_gold_strategy_cache_and_scan_endpoints(monkeypatch):
     cache_status = client.get("/v1/board-gold/cache/update/cache-task-1", headers=headers)
     assert cache_status.status_code == 200
     assert cache_status.json()["script"] == "auto_full"
+
+    current_cache_status = client.get("/v1/board-gold/cache/update/current", headers=headers)
+    assert current_cache_status.status_code == 200
+    assert current_cache_status.json()["task_id"] == "cache-task-1"
 
     started = client.post(
         "/v1/board-gold/scan",

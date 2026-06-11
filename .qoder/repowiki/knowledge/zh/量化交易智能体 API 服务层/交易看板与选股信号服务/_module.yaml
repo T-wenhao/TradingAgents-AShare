@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: api_service/tracking_watchlist
+title: 交易看板与选股信号服务
+scope:
+    - api/services/tracking_board_service.py
+    - api/services/board_gold_service.py
+    - api/services/watchlist_service.py
+source_files: []
+depends_on: []
+related_to:
+    - path: api_service/portfolio_reporting

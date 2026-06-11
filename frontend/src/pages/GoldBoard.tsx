@@ -100,17 +100,19 @@ export default function GoldBoard() {
         setLoading(true)
         setError(null)
         try {
-            const [strategyResponse, statsResponse, latestResponse, scriptsResponse] = await Promise.all([
+            const [strategyResponse, statsResponse, latestResponse, scriptsResponse, currentCacheTask] = await Promise.all([
                 api.getBoardGoldStrategies(),
                 api.getBoardGoldCacheStats(),
                 api.getBoardGoldLatestResult(),
                 api.getBoardGoldCacheScripts(),
+                api.getCurrentBoardGoldCacheUpdate(),
             ])
             const scriptItems = scriptsResponse.scripts || []
             setStrategies(strategyResponse)
             setCacheStats(statsResponse)
             setLatestResult(latestResponse.result)
             setCacheScripts({ ...scriptsResponse, scripts: scriptItems })
+            setCacheTask(currentCacheTask)
             setSelectedStrategies(prev => {
                 if (prev.length > 0) return prev
                 return strategyResponse.entry_strategies
@@ -194,7 +196,19 @@ export default function GoldBoard() {
             const task = await api.startBoardGoldCacheUpdate()
             setCacheTask(task)
         } catch (e) {
-            setError(e instanceof Error ? e.message : '启动缓存更新失败')
+            const message = e instanceof Error ? e.message : '启动缓存更新失败'
+            const runningTaskId = message.match(/已有缓存更新任务正在运行:\s*([0-9a-fA-F-]+)/)?.[1]
+            if (runningTaskId) {
+                try {
+                    const task = await api.getBoardGoldCacheUpdateStatus(runningTaskId)
+                    setCacheTask(task)
+                    setError(null)
+                    return
+                } catch {
+                    // Fall through to the original error when the task cannot be recovered.
+                }
+            }
+            setError(message)
         } finally {
             setCacheStarting(false)
         }

@@ -1,0 +1,200 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: main
+exported_at: "2026-06-11T02:55:53Z"
+modules:
+    "":
+        dir_name: A股多智能体投研平台编排层
+        title: A股多智能体投研平台编排层
+        scope:
+            - AGENTS.md
+            - Dockerfile
+            - pyproject.toml
+            - requirements.txt
+            - uv.lock
+            - .gitignore
+            - tests/
+            - skills/
+            - .github/
+            - scheduler/
+            - .env
+            - .env.example
+            - CHANGELOG.md
+            - LICENSE
+            - README.md
+            - tradingagents.db
+            - tradingagents.db-shm
+            - tradingagents.db-wal
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    api_service:
+        dir_name: 量化交易智能体 API 服务层
+        title: 量化交易智能体 API 服务层
+        scope:
+            - api/
+        source_files: []
+        children:
+            - api_service/portfolio_reporting
+            - api_service/tracking_watchlist
+            - api_service/integrations_notifications
+            - api_service/core
+        depends_on: []
+        related_to:
+            - path: frontend_app
+    api_service/core:
+        dir_name: 核心业务逻辑与数据服务层
+        title: 核心业务逻辑与数据服务层
+        scope:
+            - api/main.py
+            - api/database.py
+            - api/job_store.py
+            - api/job_store_redis.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    api_service/integrations_notifications:
+        dir_name: 外部集成与通知服务
+        title: 外部集成与通知服务
+        scope:
+            - api/services/wecom_notification_service.py
+            - api/services/sponsor_service.py
+            - api/services/feedback_service.py
+            - api/services/vlm_service.py
+            - api/services/scheduled_service.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    api_service/portfolio_reporting:
+        dir_name: 投资组合回测、导入与报告服务
+        title: 投资组合回测、导入与报告服务
+        scope:
+            - api/services/backtest_service.py
+            - api/services/portfolio_import_service.py
+            - api/services/report_service.py
+            - api/services/email_report_service.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: api_service/tracking_watchlist
+    api_service/tracking_watchlist:
+        dir_name: 交易看板与选股信号服务
+        title: 交易看板与选股信号服务
+        scope:
+            - api/services/tracking_board_service.py
+            - api/services/board_gold_service.py
+            - api/services/watchlist_service.py
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: api_service/portfolio_reporting
+    frontend_app:
+        dir_name: A股多智能体投研前端应用
+        title: A股多智能体投研前端应用
+        scope:
+            - frontend/
+        source_files: []
+        children:
+            - frontend_app/community_pages
+            - frontend_app/shared_ui
+        depends_on: []
+        related_to:
+            - path: api_service
+    frontend_app/community_pages:
+        dir_name: 社区互动与致谢展示
+        title: 社区互动与致谢展示
+        scope:
+            - frontend/src/pages/Sponsor.tsx
+            - frontend/src/pages/Thanks.tsx
+            - frontend/src/pages/Feedback.tsx
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: frontend_app/shared_ui
+    frontend_app/shared_ui:
+        dir_name: A股多智能体投研前端共享UI与状态管理
+        title: A股多智能体投研前端共享UI与状态管理
+        scope:
+            - frontend/src/components/
+            - frontend/src/hooks/
+            - frontend/src/stores/
+            - frontend/src/services/
+            - frontend/src/types/
+            - frontend/src/utils/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: frontend_app/community_pages
+    trading_agents_engine:
+        dir_name: 多智能体交易决策编排引擎
+        title: 多智能体交易决策编排引擎
+        scope:
+            - tradingagents/
+        source_files: []
+        children:
+            - trading_agents_engine/agents
+            - trading_agents_engine/prompts
+            - trading_agents_engine/llm_clients
+            - trading_agents_engine/graph_engine
+            - trading_agents_engine/dataflows
+        depends_on: []
+        related_to: []
+    trading_agents_engine/agents:
+        dir_name: 多智能体交易决策引擎
+        title: 多智能体交易决策引擎
+        scope:
+            - tradingagents/agents/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: trading_agents_engine/graph_engine
+            - path: trading_agents_engine/prompts
+    trading_agents_engine/dataflows:
+        dir_name: 多源金融数据路由与适配层
+        title: 多源金融数据路由与适配层
+        scope:
+            - tradingagents/dataflows/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: trading_agents_engine/llm_clients
+    trading_agents_engine/graph_engine:
+        dir_name: 多智能体交易图引擎
+        title: 多智能体交易图引擎
+        scope:
+            - tradingagents/graph/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: trading_agents_engine/agents
+    trading_agents_engine/llm_clients:
+        dir_name: 多提供商 LLM 客户端适配层
+        title: 多提供商 LLM 客户端适配层
+        scope:
+            - tradingagents/llm_clients/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: trading_agents_engine/dataflows
+    trading_agents_engine/prompts:
+        dir_name: 多语言提示词管理与动态路由
+        title: 多语言提示词管理与动态路由
+        scope:
+            - tradingagents/prompts/
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: trading_agents_engine/agents

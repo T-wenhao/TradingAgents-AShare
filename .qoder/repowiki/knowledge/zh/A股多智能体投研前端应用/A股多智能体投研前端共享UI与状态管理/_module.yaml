@@ -1,0 +1,14 @@
+schema_version: 1
+module_path: frontend_app/shared_ui
+title: A股多智能体投研前端共享UI与状态管理
+scope:
+    - frontend/src/components/
+    - frontend/src/hooks/
+    - frontend/src/stores/
+    - frontend/src/services/
+    - frontend/src/types/
+    - frontend/src/utils/
+source_files: []
+depends_on: []
+related_to:
+    - path: frontend_app/community_pages

@@ -319,6 +319,10 @@ class ApiService {
         })
     }
 
+    async getCurrentBoardGoldCacheUpdate(): Promise<BoardGoldCacheUpdateTask | null> {
+        return this.request<BoardGoldCacheUpdateTask | null>('/v1/board-gold/cache/update/current')
+    }
+
     async getBoardGoldCacheUpdateStatus(taskId: string): Promise<BoardGoldCacheUpdateTask> {
         return this.request<BoardGoldCacheUpdateTask>(`/v1/board-gold/cache/update/${taskId}`)
     }

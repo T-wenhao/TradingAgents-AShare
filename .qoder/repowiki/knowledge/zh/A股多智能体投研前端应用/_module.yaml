@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: frontend_app
+title: A股多智能体投研前端应用
+scope:
+    - frontend/
+source_files: []
+depends_on: []
+related_to:
+    - path: api_service

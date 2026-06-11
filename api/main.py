@@ -2797,6 +2797,14 @@ def start_board_gold_cache_update(
         raise HTTPException(400, str(exc)) from exc
 
 
+@app.get("/v1/board-gold/cache/update/current")
+def get_current_board_gold_cache_update(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    task = board_gold_service.get_current_cache_update_task()
+    return task.to_dict() if task else None
+
+
 @app.get("/v1/board-gold/cache/update/{task_id}")
 def get_board_gold_cache_update_status(
     task_id: str,
