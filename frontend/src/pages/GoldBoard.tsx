@@ -4,6 +4,7 @@ import {
     CheckCircle2,
     Clock3,
     Database,
+    FlaskConical,
     Gem,
     Loader2,
     Play,
@@ -18,7 +19,7 @@ import { useNavigate } from 'react-router-dom'
 
 import { api } from '@/services/api'
 import type {
-    BoardGoldCacheScriptsResponse,
+    BoardGoldBacktestTask,
     BoardGoldCacheStats,
     BoardGoldCacheUpdateTask,
     BoardGoldExitScanResponse,
@@ -61,7 +62,6 @@ export default function GoldBoard() {
     const navigate = useNavigate()
     const [strategies, setStrategies] = useState<BoardGoldStrategiesResponse | null>(null)
     const [cacheStats, setCacheStats] = useState<BoardGoldCacheStats | null>(null)
-    const [cacheScripts, setCacheScripts] = useState<BoardGoldCacheScriptsResponse | null>(null)
     const [cacheTask, setCacheTask] = useState<BoardGoldCacheUpdateTask | null>(null)
     const [latestResult, setLatestResult] = useState<BoardGoldResult | null>(null)
     const [scanTask, setScanTask] = useState<BoardGoldScanTask | null>(null)
@@ -78,6 +78,13 @@ export default function GoldBoard() {
     const [exitLoading, setExitLoading] = useState(false)
     const [error, setError] = useState<string | null>(null)
     const [watchlistMessage, setWatchlistMessage] = useState<string | null>(null)
+    const [backtestTask, setBacktestTask] = useState<BoardGoldBacktestTask | null>(null)
+    const [backtestLoading, setBacktestLoading] = useState(false)
+    const [backtestDate, setBacktestDate] = useState('')
+    const [backtestDays, setBacktestDays] = useState(120)
+    const [backtestMaxStocks, setBacktestMaxStocks] = useState('')
+    const [exitParamsText, setExitParamsText] = useState('')
+    const [backtestHistory, setBacktestHistory] = useState<BoardGoldBacktestTask[]>([])
 
     const entryStrategies = strategies?.entry_strategies || []
     const exitStrategies = strategies?.exit_strategies || []
@@ -85,8 +92,6 @@ export default function GoldBoard() {
     const isScanning = scanTask?.status === 'pending' || scanTask?.status === 'running'
     const isCacheUpdating = cacheTask?.status === 'pending' || cacheTask?.status === 'running'
     const progressPct = scanTask?.total ? Math.round((scanTask.current / scanTask.total) * 100) : 0
-    const cacheScriptOptions = cacheScripts?.scripts || []
-    const availableCacheRoutes = cacheScriptOptions.filter(item => item.available).length
 
     const summaryItems = useMemo(() => {
         const summary = latestResult?.summary || {}
@@ -100,17 +105,16 @@ export default function GoldBoard() {
         setLoading(true)
         setError(null)
         try {
-            const [strategyResponse, statsResponse, latestResponse, scriptsResponse] = await Promise.all([
+            const [strategyResponse, statsResponse, latestResponse, activeTask] = await Promise.all([
                 api.getBoardGoldStrategies(),
                 api.getBoardGoldCacheStats(),
                 api.getBoardGoldLatestResult(),
-                api.getBoardGoldCacheScripts(),
+                api.getActiveBoardGoldCacheUpdate(),
             ])
-            const scriptItems = scriptsResponse.scripts || []
             setStrategies(strategyResponse)
             setCacheStats(statsResponse)
             setLatestResult(latestResponse.result)
-            setCacheScripts({ ...scriptsResponse, scripts: scriptItems })
+            if (activeTask) setCacheTask(activeTask)
             setSelectedStrategies(prev => {
                 if (prev.length > 0) return prev
                 return strategyResponse.entry_strategies
@@ -252,6 +256,63 @@ export default function GoldBoard() {
         }
     }, [])
 
+    const isBacktestRunning = backtestTask?.status === 'pending' || backtestTask?.status === 'running'
+
+    useEffect(() => {
+        if (!backtestTask || !isBacktestRunning) return
+        let cancelled = false
+        const intervalId = window.setInterval(async () => {
+            try {
+                const next = await api.getBoardGoldBacktest(backtestTask.task_id)
+                if (cancelled) return
+                setBacktestTask(next)
+                if (next.status === 'completed' || next.status === 'failed') {
+                    const history = await api.listBoardGoldBacktests()
+                    if (!cancelled) setBacktestHistory(history)
+                }
+            } catch (e) {
+                if (!cancelled) setError(e instanceof Error ? e.message : '回测状态刷新失败')
+            }
+        }, 1500)
+        return () => {
+            cancelled = true
+            window.clearInterval(intervalId)
+        }
+    }, [backtestTask, isBacktestRunning])
+
+    const runBacktest = useCallback(async () => {
+        setBacktestLoading(true)
+        setError(null)
+        try {
+            let exitParams: Record<string, unknown> | undefined
+            if (exitParamsText.trim()) {
+                try {
+                    exitParams = JSON.parse(exitParamsText) as Record<string, unknown>
+                } catch {
+                    setError('离场参数 JSON 格式错误')
+                    setBacktestLoading(false)
+                    return
+                }
+            }
+            const task = await api.startBoardGoldBacktest({
+                strategies: selectedStrategies.length > 0 ? selectedStrategies : undefined,
+                exit_strategy: exitStrategy,
+                exit_params: exitParams,
+                target_date: backtestDate || undefined,
+                days: backtestDays,
+                max_stocks: backtestMaxStocks ? Number(backtestMaxStocks) : undefined,
+            })
+            setBacktestTask(task)
+        } catch (e) {
+            setError(e instanceof Error ? e.message : '启动回测失败')
+        } finally {
+            setBacktestLoading(false)
+        }
+    }, [selectedStrategies, exitStrategy, exitParamsText, backtestDate, backtestDays, backtestMaxStocks])
+
+    const backtestStats = backtestTask?.stats
+    const backtestProgressPct = backtestTask?.total ? Math.round((backtestTask.current / backtestTask.total) * 100) : 0
+
     return (
         <div className="space-y-5">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
@@ -363,9 +424,11 @@ export default function GoldBoard() {
                                 </div>
                             </div>
                             <div>
-                                <div className="text-slate-500 dark:text-slate-400">后台通道</div>
-                                <div className="mt-1 font-semibold text-slate-900 dark:text-slate-100">
-                                    {cacheScriptOptions.length ? `${availableCacheRoutes}/${cacheScriptOptions.length}` : '--'}
+                                <div className="text-slate-500 dark:text-slate-400">进度</div>
+                                <div className="mt-1 font-semibold tabular-nums text-slate-900 dark:text-slate-100">
+                                    {cacheTask && cacheTask.total > 0
+                                        ? `${cacheTask.current}/${cacheTask.total} (${Math.round((cacheTask.current / cacheTask.total) * 100)}%)`
+                                        : '--'}
                                 </div>
                             </div>
                             <div>
@@ -375,6 +438,16 @@ export default function GoldBoard() {
                                 </div>
                             </div>
                         </div>
+                        {cacheTask && cacheTask.total > 0 && isCacheUpdating && (
+                            <div className="mt-3">
+                                <div className="h-1.5 overflow-hidden rounded-full bg-slate-200 dark:bg-slate-700/80">
+                                    <div
+                                        className="h-full rounded-full bg-gradient-to-r from-amber-400 to-amber-600 transition-[width] duration-500 ease-out"
+                                        style={{ width: `${Math.max(2, Math.min((cacheTask.current / cacheTask.total) * 100, 100))}%` }}
+                                    />
+                                </div>
+                            </div>
+                        )}
                     </div>
                     <div className="px-4 py-4">
                         <div className="mb-2 flex items-center gap-2 text-xs font-medium text-slate-500 dark:text-slate-400">
@@ -532,6 +605,204 @@ export default function GoldBoard() {
                     <ExitSignalTable signals={exitResult.exit_signals} />
                 </section>
             )}
+
+            {/* 策略回测 */}
+            <section className="rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-900">
+                <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-700">
+                    <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                        <div className="flex items-center gap-2">
+                            <FlaskConical className="h-4 w-4 text-violet-500" />
+                            <h2 className="text-sm font-semibold text-slate-900 dark:text-slate-100">策略回测</h2>
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                            <label className="space-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+                                <span className="mr-1">回测日期</span>
+                                <input
+                                    type="date"
+                                    value={backtestDate}
+                                    onChange={e => setBacktestDate(e.target.value)}
+                                    className="rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                            </label>
+                            <label className="space-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+                                <span className="mr-1">窗口</span>
+                                <input
+                                    type="number"
+                                    min={20}
+                                    max={500}
+                                    value={backtestDays}
+                                    onChange={e => setBacktestDays(Number(e.target.value))}
+                                    className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                            </label>
+                            <label className="space-y-0.5 text-xs text-slate-500 dark:text-slate-400">
+                                <span className="mr-1">上限</span>
+                                <input
+                                    type="number"
+                                    min={1}
+                                    max={6000}
+                                    value={backtestMaxStocks}
+                                    onChange={e => setBacktestMaxStocks(e.target.value)}
+                                    placeholder="全部"
+                                    className="w-16 rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-xs text-slate-700 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200"
+                                />
+                            </label>
+                            <button
+                                type="button"
+                                onClick={() => void runBacktest()}
+                                disabled={backtestLoading || isBacktestRunning}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-violet-600 px-3 py-2 text-xs font-medium text-white transition-colors hover:bg-violet-500 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                                {backtestLoading || isBacktestRunning ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Play className="h-3.5 w-3.5" />}
+                                运行回测
+                            </button>
+                        </div>
+                    </div>
+
+                    {/* 离场参数迭代 */}
+                    <div className="mt-3">
+                        <details className="group">
+                            <summary className="cursor-pointer text-xs font-medium text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200">
+                                离场参数覆盖 (JSON)
+                            </summary>
+                            <div className="mt-2">
+                                <textarea
+                                    value={exitParamsText}
+                                    onChange={e => setExitParamsText(e.target.value)}
+                                    placeholder={'{"profit_target": 8, "stop_loss": -5, "max_hold_days": 10}'}
+                                    className="min-h-[60px] w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 font-mono text-xs text-slate-800 outline-none focus:border-blue-400 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+                                />
+                                <p className="mt-1 text-xs text-slate-400 dark:text-slate-500">
+                                    {exitStrategy === 'fixed_exit' && '可用: profit_target, stop_loss, max_hold_days'}
+                                    {exitStrategy === 'trailing_exit' && '可用: profit_target, stop_loss, trailing_stop, max_hold_days'}
+                                    {exitStrategy === 'phoenix_exit' && '可用: stop_loss, trailing_stop, max_hold_days'}
+                                </p>
+                            </div>
+                        </details>
+                    </div>
+
+                    {/* 进度条 */}
+                    {backtestTask && isBacktestRunning && (
+                        <div className="mt-3">
+                            <div className="mb-1 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                <span>{statusLabel(backtestTask.status)}</span>
+                                <span>{backtestProgressPct}%</span>
+                            </div>
+                            <div className="h-2 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                                <div
+                                    className="h-full rounded-full bg-violet-500 transition-all"
+                                    style={{ width: `${Math.max(0, Math.min(backtestProgressPct, 100))}%` }}
+                                />
+                            </div>
+                        </div>
+                    )}
+                </div>
+
+                {/* 回测结果统计 */}
+                {backtestStats && (
+                    <div className="border-b border-slate-200 px-4 py-4 dark:border-slate-700">
+                        <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+                            <StatTile icon={Target} label="入场信号" value={`${backtestStats.total_entries}`} subValue={`离场 ${backtestStats.total_exits}`} tone="blue" />
+                            <StatTile icon={TrendingUp} label="胜率" value={`${backtestStats.win_rate}%`} subValue={`${backtestStats.win_count} 胜 / ${backtestStats.loss_count} 负`} tone={backtestStats.win_rate >= 50 ? 'emerald' : 'amber'} />
+                            <StatTile icon={BarChart3} label="平均收益" value={`${backtestStats.avg_return_pct}%`} subValue={`最大 ${backtestStats.max_return_pct}%`} tone="violet" />
+                            <StatTile icon={ShieldAlert} label="最大亏损" value={`${backtestStats.min_return_pct}%`} subValue="单次最大回撤" tone="rose" />
+                        </div>
+
+                        {/* 按策略分组统计 */}
+                        {Object.keys(backtestStats.by_strategy).length > 1 && (
+                            <div className="mt-4">
+                                <div className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">按入场策略分组</div>
+                                <div className="overflow-x-auto">
+                                    <table className="min-w-full divide-y divide-slate-200 text-xs dark:divide-slate-700">
+                                        <thead className="bg-slate-50 text-slate-500 dark:bg-slate-800/70 dark:text-slate-400">
+                                            <tr>
+                                                <Th>策略</Th>
+                                                <Th align="right">信号数</Th>
+                                                <Th align="right">胜率</Th>
+                                                <Th align="right">均收益</Th>
+                                            </tr>
+                                        </thead>
+                                        <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                            {Object.entries(backtestStats.by_strategy).map(([name, s]) => (
+                                                <tr key={name}>
+                                                    <Td>{strategyLabel(name)}</Td>
+                                                    <Td align="right">{s.count}</Td>
+                                                    <Td align="right">
+                                                        <span className={s.win_rate >= 50 ? 'text-emerald-600 dark:text-emerald-300' : 'text-rose-600 dark:text-rose-300'}>
+                                                            {s.win_rate}%
+                                                        </span>
+                                                    </Td>
+                                                    <Td align="right">
+                                                        <span className={s.avg_return_pct >= 0 ? 'text-rose-600 dark:text-rose-300' : 'text-emerald-600 dark:text-emerald-300'}>
+                                                            {s.avg_return_pct}%
+                                                        </span>
+                                                    </Td>
+                                                </tr>
+                                            ))}
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* 离场类型分布 */}
+                        {Object.keys(backtestStats.by_exit_type).length > 0 && (
+                            <div className="mt-4">
+                                <div className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">离场类型分布</div>
+                                <div className="space-y-1.5">
+                                    {Object.entries(backtestStats.by_exit_type).map(([type, info]) => (
+                                        <div key={type} className="flex items-center gap-2">
+                                            <span className="w-20 shrink-0 truncate text-xs text-slate-600 dark:text-slate-300">{exitTypeLabel(type)}</span>
+                                            <div className="h-4 flex-1 overflow-hidden rounded-full bg-slate-100 dark:bg-slate-800">
+                                                <div
+                                                    className="h-full rounded-full bg-blue-500"
+                                                    style={{ width: `${info.ratio}%` }}
+                                                />
+                                            </div>
+                                            <span className="w-16 shrink-0 text-right text-xs tabular-nums text-slate-500">{info.count} ({info.ratio}%)</span>
+                                        </div>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
+                    </div>
+                )}
+
+                {/* 回测明细表 */}
+                {backtestTask?.status === 'completed' && backtestTask.exit_signals.length > 0 && (
+                    <ExitSignalTable signals={backtestTask.exit_signals} />
+                )}
+
+                {/* 回测日志 */}
+                {backtestTask?.logs.length ? (
+                    <div className="px-4 py-3">
+                        <pre className="max-h-28 overflow-auto whitespace-pre-wrap rounded-lg bg-slate-950 px-3 py-2 text-xs leading-5 text-slate-200">{backtestTask.logs.slice(-40).join('\n')}</pre>
+                    </div>
+                ) : null}
+
+                {/* 回测历史 */}
+                {backtestHistory.length > 0 && (
+                    <div className="border-t border-slate-200 px-4 py-3 dark:border-slate-700">
+                        <div className="mb-2 text-xs font-medium text-slate-500 dark:text-slate-400">历史记录</div>
+                        <div className="flex flex-wrap gap-2">
+                            {backtestHistory.slice(0, 8).map(t => (
+                                <button
+                                    key={t.task_id}
+                                    type="button"
+                                    onClick={() => setBacktestTask(t)}
+                                    className={`rounded-lg border px-2.5 py-1.5 text-xs transition-colors ${
+                                        backtestTask?.task_id === t.task_id
+                                            ? 'border-violet-300 bg-violet-50 text-violet-700 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-200'
+                                            : 'border-slate-200 bg-slate-50 text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300 dark:hover:bg-slate-800'
+                                    }`}
+                                >
+                                    {t.stats ? `${t.stats.win_rate}%` : '--'} · {formatDateTime(t.created_at)}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </section>
         </div>
     )
 }
@@ -712,7 +983,7 @@ function StatTile({
     label: string
     value: string
     subValue: string
-    tone: 'blue' | 'emerald' | 'amber' | 'violet' | 'slate'
+    tone: 'blue' | 'emerald' | 'amber' | 'violet' | 'slate' | 'rose'
     loading?: boolean
 }) {
     const toneClass = {
@@ -721,6 +992,7 @@ function StatTile({
         amber: 'bg-amber-50 text-amber-600 dark:bg-amber-500/10 dark:text-amber-300',
         violet: 'bg-violet-50 text-violet-600 dark:bg-violet-500/10 dark:text-violet-300',
         slate: 'bg-slate-100 text-slate-500 dark:bg-slate-800 dark:text-slate-300',
+        rose: 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-300',
     }[tone]
 
     return (

@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: frontend_app/community_pages
+title: 社区互动与致谢展示
+scope:
+    - frontend/src/pages/Sponsor.tsx
+    - frontend/src/pages/Thanks.tsx
+    - frontend/src/pages/Feedback.tsx
+source_files: []
+depends_on: []
+related_to:
+    - path: frontend_app/shared_ui

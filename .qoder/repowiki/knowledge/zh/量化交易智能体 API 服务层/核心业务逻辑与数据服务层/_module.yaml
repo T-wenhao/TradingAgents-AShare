@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: api_service/core
+title: 核心业务逻辑与数据服务层
+scope:
+    - api/main.py
+    - api/database.py
+    - api/job_store.py
+    - api/job_store_redis.py
+source_files: []
+depends_on: []
+related_to: []

@@ -143,11 +143,22 @@ cd ..
 复制 `.env.example` 到 `.env` 并按需修改，然后：
 
 ```bash
-# 启动后端
-uv run python -m uvicorn api.main:app --port 8000
+# 一键启动本地项目（后端 + 前端）
+./scripts/start.sh
 ```
 
-访问 `http://localhost:8000` 即可开始 AI 投研之旅。
+访问 `http://127.0.0.1:5175` 即可开始 AI 投研之旅。脚本会保持前台运行，
+按 `Ctrl+C` 或关闭脚本会退出本次启动的后端和前端。日志和 PID 会写入
+`.run/`，该目录不会提交到 git。
+
+首次未安装前端依赖时，先执行 `cd frontend && npm install`，或使用
+`AUTO_INSTALL=1 ./scripts/start.sh` 让脚本自动安装前端依赖。
+
+如需单独启动后端：
+
+```bash
+uv run python -m uvicorn api.main:app --port 8000
+```
 
 ## API 集成
 

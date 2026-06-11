@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: api_service/integrations_notifications
+title: 外部集成与通知服务
+scope:
+    - api/services/wecom_notification_service.py
+    - api/services/sponsor_service.py
+    - api/services/feedback_service.py
+    - api/services/vlm_service.py
+    - api/services/scheduled_service.py
+source_files: []
+depends_on: []
+related_to: []

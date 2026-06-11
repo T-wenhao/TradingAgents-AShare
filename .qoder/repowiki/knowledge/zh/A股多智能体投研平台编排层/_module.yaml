@@ -1,0 +1,25 @@
+schema_version: 1
+module_path: ""
+title: A股多智能体投研平台编排层
+scope:
+    - AGENTS.md
+    - Dockerfile
+    - pyproject.toml
+    - requirements.txt
+    - uv.lock
+    - .gitignore
+    - tests/
+    - skills/
+    - .github/
+    - scheduler/
+    - .env
+    - .env.example
+    - CHANGELOG.md
+    - LICENSE
+    - README.md
+    - tradingagents.db
+    - tradingagents.db-shm
+    - tradingagents.db-wal
+source_files: []
+depends_on: []
+related_to: []

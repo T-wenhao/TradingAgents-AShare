@@ -687,6 +687,17 @@ class BoardGoldExitScanRequest(BaseModel):
     exit_strategy: str = Field(default="fixed_exit")
     entries: List[Dict[str, Any]] = Field(default_factory=list)
     days: int = Field(default=120, ge=20, le=320)
+    custom_params: Optional[Dict[str, Any]] = Field(default=None)
+
+
+class BoardGoldBacktestRequest(BaseModel):
+    strategies: Optional[List[str]] = Field(default=None)
+    exit_strategy: str = Field(default="fixed_exit")
+    exit_params: Optional[Dict[str, Any]] = Field(default=None)
+    target_date: Optional[str] = Field(default=None, description="YYYY-MM-DD")
+    days: int = Field(default=120, ge=20, le=500)
+    max_stocks: Optional[int] = Field(default=None, ge=1, le=6000)
+    symbols: Optional[List[str]] = Field(default=None)
 
 
 class BoardGoldCacheUpdateRequest(BaseModel):
@@ -2785,6 +2796,16 @@ def get_board_gold_cache_scripts(
     return board_gold_service.list_cache_scripts()
 
 
+@app.get("/v1/board-gold/cache/update/active")
+def get_active_board_gold_cache_update(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    task = board_gold_service.get_active_cache_task()
+    if not task:
+        return None
+    return task.to_dict()
+
+
 @app.post("/v1/board-gold/cache/update")
 def start_board_gold_cache_update(
     request: BoardGoldCacheUpdateRequest,
@@ -2850,9 +2871,38 @@ def scan_board_gold_exit_signals(
             entries=request.entries,
             exit_strategy_name=request.exit_strategy,
             days=request.days,
+            custom_params=request.custom_params,
         )
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
+
+
+@app.post("/v1/board-gold/backtest")
+def start_board_gold_backtest(
+    request: BoardGoldBacktestRequest,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    params = request.model_dump()
+    task = board_gold_service.start_backtest(params)
+    return task.to_dict()
+
+
+@app.get("/v1/board-gold/backtest")
+def list_board_gold_backtests(
+    current_user: UserDB = Depends(_require_api_user),
+):
+    return [t.to_dict() for t in board_gold_service.list_backtests()]
+
+
+@app.get("/v1/board-gold/backtest/{task_id}")
+def get_board_gold_backtest(
+    task_id: str,
+    current_user: UserDB = Depends(_require_api_user),
+):
+    task = board_gold_service.get_backtest_task(task_id)
+    if not task:
+        raise HTTPException(404, "未找到回测任务")
+    return task.to_dict()
 
 
 @app.post("/v1/analyze", response_model=AnalyzeResponse)

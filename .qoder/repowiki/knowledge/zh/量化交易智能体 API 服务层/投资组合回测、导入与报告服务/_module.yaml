@@ -1,0 +1,12 @@
+schema_version: 1
+module_path: api_service/portfolio_reporting
+title: 投资组合回测、导入与报告服务
+scope:
+    - api/services/backtest_service.py
+    - api/services/portfolio_import_service.py
+    - api/services/report_service.py
+    - api/services/email_report_service.py
+source_files: []
+depends_on: []
+related_to:
+    - path: api_service/tracking_watchlist

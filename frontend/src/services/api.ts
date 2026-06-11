@@ -4,6 +4,8 @@ import type {
     Announcement,
     AuthUser,
     AuthVerifyResponse,
+    BoardGoldBacktestRequest,
+    BoardGoldBacktestTask,
     BoardGoldCacheScriptsResponse,
     BoardGoldCacheStats,
     BoardGoldCacheUpdateRequest,
@@ -323,6 +325,10 @@ class ApiService {
         return this.request<BoardGoldCacheUpdateTask>(`/v1/board-gold/cache/update/${taskId}`)
     }
 
+    async getActiveBoardGoldCacheUpdate(): Promise<BoardGoldCacheUpdateTask | null> {
+        return this.request<BoardGoldCacheUpdateTask | null>('/v1/board-gold/cache/update/active')
+    }
+
     async startBoardGoldScan(request: BoardGoldScanRequest): Promise<BoardGoldScanTask> {
         return this.request<BoardGoldScanTask>('/v1/board-gold/scan', {
             method: 'POST',
@@ -342,6 +348,7 @@ class ApiService {
         entries: Array<Record<string, unknown>>,
         exitStrategy = 'fixed_exit',
         days = 120,
+        customParams?: Record<string, unknown>,
     ): Promise<BoardGoldExitScanResponse> {
         return this.request<BoardGoldExitScanResponse>('/v1/board-gold/exit-scan', {
             method: 'POST',
@@ -349,8 +356,24 @@ class ApiService {
                 entries,
                 exit_strategy: exitStrategy,
                 days,
+                custom_params: customParams,
             }),
         })
+    }
+
+    async startBoardGoldBacktest(request: BoardGoldBacktestRequest): Promise<BoardGoldBacktestTask> {
+        return this.request<BoardGoldBacktestTask>('/v1/board-gold/backtest', {
+            method: 'POST',
+            body: JSON.stringify(request),
+        })
+    }
+
+    async getBoardGoldBacktest(taskId: string): Promise<BoardGoldBacktestTask> {
+        return this.request<BoardGoldBacktestTask>(`/v1/board-gold/backtest/${taskId}`)
+    }
+
+    async listBoardGoldBacktests(): Promise<BoardGoldBacktestTask[]> {
+        return this.request<BoardGoldBacktestTask[]>('/v1/board-gold/backtest')
     }
 
     // Stock Search

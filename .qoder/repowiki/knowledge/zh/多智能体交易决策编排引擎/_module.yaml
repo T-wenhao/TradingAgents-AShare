@@ -1,0 +1,8 @@
+schema_version: 1
+module_path: trading_agents_engine
+title: 多智能体交易决策编排引擎
+scope:
+    - tradingagents/
+source_files: []
+depends_on: []
+related_to: []

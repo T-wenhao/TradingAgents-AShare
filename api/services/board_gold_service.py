@@ -1077,6 +1077,8 @@ class CacheUpdateTask:
     finished_at: Optional[str] = None
     exit_code: Optional[int] = None
     error: Optional[str] = None
+    current: int = 0
+    total: int = 0
     logs: List[str] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -1090,10 +1092,45 @@ class CacheUpdateTask:
             "finished_at": self.finished_at,
             "exit_code": self.exit_code,
             "error": self.error,
+            "current": self.current,
+            "total": self.total,
             "scripts_dir": self.scripts_dir,
             "cwd": self.cwd,
             "command": self.command,
             "logs": self.logs[-240:],
+        }
+
+
+@dataclass
+class BacktestTask:
+    id: str
+    status: str
+    created_at: str
+    params: Dict[str, Any]
+    started_at: Optional[str] = None
+    finished_at: Optional[str] = None
+    current: int = 0
+    total: int = 0
+    stats: Optional[Dict[str, Any]] = None
+    exit_signals: List[Dict[str, Any]] = field(default_factory=list)
+    error: Optional[str] = None
+    logs: List[str] = field(default_factory=list)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "task_id": self.id,
+            "status": self.status,
+            "created_at": self.created_at,
+            "started_at": self.started_at,
+            "finished_at": self.finished_at,
+            "current": self.current,
+            "total": self.total,
+            "stats": self.stats,
+            "exit_signals_count": len(self.exit_signals),
+            "exit_signals": self.exit_signals,
+            "error": self.error,
+            "params": self.params,
+            "logs": self.logs[-120:],
         }
 
 
@@ -1283,12 +1320,17 @@ class BoardGoldScanner:
         entries: List[Dict[str, Any]],
         exit_strategy_name: str = "fixed_exit",
         days: int = 120,
+        custom_params: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         cls = EXIT_STRATEGY_REGISTRY.get(exit_strategy_name)
         if not cls:
             raise ValueError(f"离场策略不存在: {exit_strategy_name}")
         params = dict(DEFAULT_EXIT_STRATEGY_PARAMS.get(exit_strategy_name, {}))
         params.pop("enabled", None)
+        if custom_params:
+            for k, v in custom_params.items():
+                if k in params:
+                    params[k] = type(params[k])(v)
         exit_strategy = cls(params)
         exit_signals: List[ExitSignal] = []
 
@@ -1341,6 +1383,118 @@ class BoardGoldScanner:
         text = json.dumps(payload, ensure_ascii=False, indent=2)
         latest_path.write_text(text, encoding="utf-8")
         dated_path.write_text(text, encoding="utf-8")
+
+    # ------------------------------------------------------------------
+    # Backtest
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _compute_backtest_stats(
+        entries: List[Dict[str, Any]],
+        exit_signals: List[Dict[str, Any]],
+    ) -> Dict[str, Any]:
+        total_entries = len(entries)
+        total_exits = len(exit_signals)
+        if total_exits == 0:
+            return {
+                "total_entries": total_entries,
+                "total_exits": 0,
+                "win_count": 0,
+                "loss_count": 0,
+                "win_rate": 0.0,
+                "avg_return_pct": 0.0,
+                "max_return_pct": 0.0,
+                "min_return_pct": 0.0,
+                "by_strategy": {},
+                "by_exit_type": {},
+            }
+
+        returns = [float(s.get("profit_pct") or 0) for s in exit_signals]
+        win_count = sum(1 for r in returns if r > 0)
+        loss_count = total_exits - win_count
+
+        by_strategy: Dict[str, Dict[str, Any]] = {}
+        for s in exit_signals:
+            key = s.get("strategy") or "unknown"
+            bucket = by_strategy.setdefault(key, {"count": 0, "wins": 0, "returns": []})
+            bucket["count"] += 1
+            ret = float(s.get("profit_pct") or 0)
+            if ret > 0:
+                bucket["wins"] += 1
+            bucket["returns"].append(ret)
+        by_strategy_summary = {
+            k: {
+                "count": v["count"],
+                "win_rate": round(v["wins"] / v["count"] * 100, 1) if v["count"] else 0.0,
+                "avg_return_pct": round(sum(v["returns"]) / len(v["returns"]), 2),
+            }
+            for k, v in by_strategy.items()
+        }
+
+        by_exit_type: Dict[str, int] = {}
+        for s in exit_signals:
+            et = s.get("exit_type") or "unknown"
+            by_exit_type[et] = by_exit_type.get(et, 0) + 1
+        by_exit_type_ratio = {
+            k: {"count": v, "ratio": round(v / total_exits * 100, 1)}
+            for k, v in by_exit_type.items()
+        }
+
+        return {
+            "total_entries": total_entries,
+            "total_exits": total_exits,
+            "win_count": win_count,
+            "loss_count": loss_count,
+            "win_rate": round(win_count / total_exits * 100, 1),
+            "avg_return_pct": round(sum(returns) / len(returns), 2),
+            "max_return_pct": round(max(returns), 2),
+            "min_return_pct": round(min(returns), 2),
+            "by_strategy": by_strategy_summary,
+            "by_exit_type": by_exit_type_ratio,
+        }
+
+    def run_backtest(
+        self,
+        strategy_names: Optional[List[str]] = None,
+        exit_strategy_name: str = "fixed_exit",
+        exit_params: Optional[Dict[str, Any]] = None,
+        target_date: Optional[str] = None,
+        days: int = 120,
+        max_stocks: Optional[int] = None,
+        symbols: Optional[List[str]] = None,
+        progress: Optional[Any] = None,
+    ) -> Dict[str, Any]:
+        if progress:
+            progress(0, 2, [], "开始回测：扫描历史入场信号")
+        entry_result = self.scan_entries(
+            strategy_names=strategy_names,
+            symbols=symbols,
+            days=days,
+            target_date=target_date,
+            max_stocks=max_stocks,
+            progress=None,
+        )
+        entries = entry_result.get("signals") or []
+        if progress:
+            progress(1, 2, entries, f"入场信号 {len(entries)} 个，开始离场回测")
+        exit_result = self.scan_exits(
+            entries=entries,
+            exit_strategy_name=exit_strategy_name,
+            days=days,
+            custom_params=exit_params,
+        )
+        exit_signals = exit_result.get("exit_signals") or []
+        stats = self._compute_backtest_stats(entries, exit_signals)
+        if progress:
+            progress(2, 2, entries, f"回测完成，胜率 {stats['win_rate']}%")
+        return {
+            "stats": stats,
+            "exit_signals": exit_signals,
+            "exit_strategy": exit_strategy_name,
+            "exit_params": exit_params,
+            "target_date": target_date,
+            "days": days,
+        }
 
     def _select_stock_items(self, symbols: Optional[List[str]]) -> List[Dict[str, str]]:
         if not symbols:
@@ -1419,6 +1573,7 @@ class BoardGoldTaskManager:
         self.cache_executor = ThreadPoolExecutor(max_workers=1)
         self.tasks: Dict[str, ScanTask] = {}
         self.cache_tasks: Dict[str, CacheUpdateTask] = {}
+        self.backtest_tasks: Dict[str, BacktestTask] = {}
         self.lock = threading.Lock()
 
     def cache_stats(self) -> Dict[str, Any]:
@@ -1501,6 +1656,83 @@ class BoardGoldTaskManager:
     def get_cache_update_task(self, task_id: str) -> Optional[CacheUpdateTask]:
         with self.lock:
             return self.cache_tasks.get(task_id)
+
+    def get_active_cache_task(self) -> Optional[CacheUpdateTask]:
+        with self.lock:
+            return next(
+                (
+                    task for task in self.cache_tasks.values()
+                    if task.status in {"pending", "running"}
+                ),
+                None,
+            )
+
+    # ------------------------------------------------------------------
+    # Backtest tasks
+    # ------------------------------------------------------------------
+
+    def start_backtest(self, params: Dict[str, Any]) -> BacktestTask:
+        task = BacktestTask(
+            id=uuid4().hex,
+            status="pending",
+            created_at=datetime.now(timezone.utc).isoformat(),
+            params=dict(params),
+        )
+        with self.lock:
+            self.backtest_tasks[task.id] = task
+        self.executor.submit(self._run_backtest_task, task.id)
+        return task
+
+    def get_backtest_task(self, task_id: str) -> Optional[BacktestTask]:
+        with self.lock:
+            return self.backtest_tasks.get(task_id)
+
+    def list_backtests(self) -> List[BacktestTask]:
+        with self.lock:
+            return sorted(self.backtest_tasks.values(), key=lambda t: t.created_at, reverse=True)
+
+    def _run_backtest_task(self, task_id: str) -> None:
+        with self.lock:
+            task = self.backtest_tasks[task_id]
+            task.status = "running"
+            task.started_at = datetime.now(timezone.utc).isoformat()
+
+        def progress(current: int, total: int, signals: List[Dict[str, Any]], message: str) -> None:
+            with self.lock:
+                current_task = self.backtest_tasks.get(task_id)
+                if not current_task:
+                    return
+                current_task.current = current
+                current_task.total = total
+                current_task.logs.append(f"{datetime.now().strftime('%H:%M:%S')} {message}")
+                current_task.logs = current_task.logs[-120:]
+
+        try:
+            p = task.params
+            result = self.scanner.run_backtest(
+                strategy_names=p.get("strategies"),
+                exit_strategy_name=p.get("exit_strategy") or "fixed_exit",
+                exit_params=p.get("exit_params"),
+                target_date=p.get("target_date"),
+                days=int(p.get("days") or 120),
+                max_stocks=p.get("max_stocks"),
+                symbols=p.get("symbols"),
+                progress=progress,
+            )
+            with self.lock:
+                task = self.backtest_tasks[task_id]
+                task.status = "completed"
+                task.finished_at = datetime.now(timezone.utc).isoformat()
+                task.stats = result["stats"]
+                task.exit_signals = result["exit_signals"]
+                task.current = task.total or 2
+        except Exception as exc:
+            with self.lock:
+                task = self.backtest_tasks[task_id]
+                task.status = "failed"
+                task.finished_at = datetime.now(timezone.utc).isoformat()
+                task.error = str(exc)
+                task.logs.append(f"{datetime.now().strftime('%H:%M:%S')} 回测失败：{exc}")
 
     def _run_task(self, task_id: str) -> None:
         with self.lock:
@@ -1626,10 +1858,17 @@ class BoardGoldTaskManager:
 
             self._append_cache_log(task_id, "自动更新开始：基础信息 -> 日线缓存 -> 因子 -> 质量检查")
             self._append_cache_log(task_id, f"本地数据目录：{self.scanner.data_dir}")
+            with self.lock:
+                task = self.cache_tasks[task_id]
+                task.total = 5
+                task.current = 0
 
             basic_script = scripts_dir / "collect_stock_basic.py"
             if basic_script.exists():
                 self._append_cache_log(task_id, "阶段 1/5 刷新股票基础信息")
+                with self.lock:
+                    task = self.cache_tasks[task_id]
+                    task.current = 1
                 exit_code = self._run_cache_subprocess(
                     task_id,
                     [sys.executable, str(basic_script), "--extend"],
@@ -1644,6 +1883,9 @@ class BoardGoldTaskManager:
             daily_script = scripts_dir / "daily_update.py"
             if daily_script.exists() and not options["symbols"]:
                 self._append_cache_log(task_id, "阶段 2/5 运行旧采集器增量修复，不限制股票数量")
+                with self.lock:
+                    task = self.cache_tasks[task_id]
+                    task.current = 2
                 exit_code = self._run_cache_subprocess(
                     task_id,
                     [
@@ -1667,6 +1909,9 @@ class BoardGoldTaskManager:
                 self._append_cache_log(task_id, "阶段 2/5 未找到旧采集器，直接使用 BaoStock")
 
             self._append_cache_log(task_id, "阶段 3/5 BaoStock 增量补齐前复权和未复权日线")
+            with self.lock:
+                task = self.cache_tasks[task_id]
+                task.current = 3
             baostock_args = ["--all", "--sleep", str(options["sleep"]), "--days", str(options["days"])]
             if options["start_date"]:
                 baostock_args.extend(["--start-date", options["start_date"]])
@@ -1687,6 +1932,9 @@ class BoardGoldTaskManager:
             factor_script = scripts_dir / "calc_factors.py"
             if factor_script.exists():
                 self._append_cache_log(task_id, "阶段 4/5 计算技术因子")
+                with self.lock:
+                    task = self.cache_tasks[task_id]
+                    task.current = 4
                 exit_code = self._run_cache_subprocess(
                     task_id,
                     [sys.executable, str(factor_script), "--range", "1y"],
@@ -1784,6 +2032,11 @@ class BoardGoldTaskManager:
         end_date = options["end_date"] or datetime.now().strftime("%Y-%m-%d")
         failure_limit = options["max_consecutive_failures"]
 
+        with self.lock:
+            task = self.cache_tasks.get(task_id)
+            if task:
+                task.total = total
+
         with self._baostock_session() as bs:
             for index, item in enumerate(items, start=1):
                 symbol = normalize_bare_symbol(item["symbol"])
@@ -1796,6 +2049,10 @@ class BoardGoldTaskManager:
                         self._append_cache_log(task_id, f"{normalize_display_symbol(symbol)} 本地缓存已覆盖到 {end_date}，跳过")
                     continue
                 self._append_cache_log(task_id, f"BaoStock {index}/{total} {normalize_display_symbol(symbol)} {start_date}~{end_date}")
+                with self.lock:
+                    task = self.cache_tasks.get(task_id)
+                    if task:
+                        task.current = index
                 try:
                     qfq_df = self._fetch_baostock_daily(bs, symbol, start_date, end_date, adjustflag="2")
                     raw_df = pd.DataFrame() if options["no_raw"] else self._fetch_baostock_daily(bs, symbol, start_date, end_date, adjustflag="3")

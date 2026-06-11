@@ -615,6 +615,8 @@ export interface BoardGoldCacheUpdateTask {
     finished_at?: string | null
     exit_code?: number | null
     error?: string | null
+    current: number
+    total: number
     scripts_dir: string
     cwd: string
     command: string[]
@@ -697,6 +699,45 @@ export interface BoardGoldExitScanResponse {
     entries_count: number
     exit_signals_count: number
     exit_signals: BoardGoldExitSignal[]
+}
+
+export interface BoardGoldBacktestRequest {
+    strategies?: string[] | null
+    exit_strategy: string
+    exit_params?: Record<string, unknown> | null
+    target_date?: string | null
+    days?: number
+    max_stocks?: number | null
+    symbols?: string[] | null
+}
+
+export interface BoardGoldBacktestStats {
+    total_entries: number
+    total_exits: number
+    win_count: number
+    loss_count: number
+    win_rate: number
+    avg_return_pct: number
+    max_return_pct: number
+    min_return_pct: number
+    by_strategy: Record<string, { count: number; win_rate: number; avg_return_pct: number }>
+    by_exit_type: Record<string, { count: number; ratio: number }>
+}
+
+export interface BoardGoldBacktestTask {
+    task_id: string
+    status: 'pending' | 'running' | 'completed' | 'failed'
+    created_at: string
+    started_at?: string | null
+    finished_at?: string | null
+    current: number
+    total: number
+    stats?: BoardGoldBacktestStats | null
+    exit_signals_count: number
+    exit_signals: BoardGoldExitSignal[]
+    error?: string | null
+    params: BoardGoldBacktestRequest
+    logs: string[]
 }
 
 // Runtime config

@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: trading_agents_engine/graph_engine
+title: 多智能体交易图引擎
+scope:
+    - tradingagents/graph/
+source_files: []
+depends_on: []
+related_to:
+    - path: trading_agents_engine/agents

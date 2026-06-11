@@ -86,6 +86,28 @@ class _FakeCacheTask:
         }
 
 
+class _FakeBacktestTask:
+    def __init__(self):
+        self.task_id = "backtest-task-1"
+
+    def to_dict(self):
+        return {
+            "task_id": self.task_id,
+            "status": "pending",
+            "created_at": "2026-01-01T00:00:00+00:00",
+            "started_at": None,
+            "finished_at": None,
+            "current": 0,
+            "total": 0,
+            "stats": None,
+            "exit_signals_count": 0,
+            "exit_signals": [],
+            "error": None,
+            "params": {"exit_strategy": "fixed_exit"},
+            "logs": [],
+        }
+
+
 class _FakeScanner:
     def strategy_info(self):
         return {
@@ -120,7 +142,7 @@ class _FakeScanner:
             "summary": {},
         }
 
-    def scan_exits(self, entries, exit_strategy_name, days):
+    def scan_exits(self, entries, exit_strategy_name, days, custom_params=None):
         return {
             "scan_time": "2026-01-01T00:00:00+00:00",
             "exit_strategy": exit_strategy_name,
@@ -191,6 +213,18 @@ class _FakeBoardGoldService:
 
     def get_cache_update_task(self, task_id):
         return self.cache_task if task_id == self.cache_task.task_id else None
+
+    def get_active_cache_task(self):
+        return None
+
+    def start_backtest(self, params):
+        return _FakeBacktestTask()
+
+    def get_backtest_task(self, task_id):
+        return None
+
+    def list_backtests(self):
+        return []
 
 
 def test_board_gold_endpoints_require_auth():

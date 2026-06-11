@@ -1,0 +1,9 @@
+schema_version: 1
+module_path: trading_agents_engine/dataflows
+title: 多源金融数据路由与适配层
+scope:
+    - tradingagents/dataflows/
+source_files: []
+depends_on: []
+related_to:
+    - path: trading_agents_engine/llm_clients

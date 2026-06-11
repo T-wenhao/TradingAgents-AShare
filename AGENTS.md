@@ -50,6 +50,9 @@ uv run python -m uvicorn api.main:app --port 8000
 # Run scheduler
 uv run python -m scheduler.main
 
+# Run local backend + frontend together
+./scripts/start.sh
+
 # Run backend tests
 uv run pytest -q
 
